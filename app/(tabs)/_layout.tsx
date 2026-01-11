@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import React from 'react';
+import * as React from 'react';
 import { I18nManager } from 'react-native';
 
 import { Colors } from '@/constants/Colors';
@@ -38,6 +38,28 @@ export default function TabLayout() {
           },
         }}
       >
+        {/* Upload Content Tab - NEW */}
+        <Tabs.Screen
+          name="upload"
+          options={{
+            title: 'העלאה',
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="cloud-upload" size={24} color={color} />
+            ),
+          }}
+        />
+
+        {/* My Content Tab - NEW */}
+        <Tabs.Screen
+          name="my-content"
+          options={{
+            title: 'הקבצים שלי',
+            tabBarIcon: ({ color }) => (
+              <Ionicons name="document-text" size={24} color={color} />
+            ),
+          }}
+        />
+
         {/* אירועים (Events) Tab */}
         <Tabs.Screen
           name="events"
