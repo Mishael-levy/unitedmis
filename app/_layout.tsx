@@ -27,11 +27,22 @@ export default function RootLayout() {
   useEffect(() => {
     // Use Groq API for AI-powered exercise generation (free!)
     // Get your free API key at: https://console.groq.com/keys
-    initializeAIProcessor({ 
-      provider: 'groq',
-      apiKey: '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',
-      model: 'llama-3.3-70b-versatile', // Free, fast, and great for Hebrew
-    });
+    // Set EXPO_PUBLIC_GROQ_API_KEY in your environment or .env file
+    const groqApiKey = process.env.EXPO_PUBLIC_GROQ_API_KEY || '';
+    
+    if (groqApiKey) {
+      initializeAIProcessor({ 
+        provider: 'groq',
+        apiKey: groqApiKey,
+        model: 'llama-3.3-70b-versatile',
+      });
+    } else {
+      // Fallback to local generation if no API key
+      initializeAIProcessor({ 
+        provider: 'local',
+      });
+      console.warn('No GROQ API key found - using local generation');
+    }
   }, []);
 
   useEffect(() => {
