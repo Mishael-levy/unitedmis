@@ -8,10 +8,12 @@ import {
   Pressable,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Exercise } from '@/types/data';
 import PressableOption from './PressableOption';
 import AnswerIndex from './AnswerIndex';
+import { getAIProcessor } from '@/services/AIContentProcessor';
 
 interface ChoiceExerciseProps {
   exercise: Exercise;
@@ -28,6 +30,8 @@ export default function ChoiceExercise({
   const [fillBlankAnswer, setFillBlankAnswer] = useState('');
   const [fillBlankSubmitted, setFillBlankSubmitted] = useState(false);
   const [fillBlankCorrect, setFillBlankCorrect] = useState(false);
+  const [isCheckingAnswer, setIsCheckingAnswer] = useState(false);
+  const [attemptsLeft, setAttemptsLeft] = useState(2); // Allow 2 attempts for fill-blank
 
   // Reset state when exercise changes
   useEffect(() => {
@@ -36,6 +40,8 @@ export default function ChoiceExercise({
     setFillBlankAnswer('');
     setFillBlankSubmitted(false);
     setFillBlankCorrect(false);
+    setIsCheckingAnswer(false);
+    setAttemptsLeft(2);
   }, [exercise.id]);
 
   const handleAnswerPress = (index: number) => {
@@ -49,29 +55,141 @@ export default function ChoiceExercise({
     onAnswerSelected(isCorrect);
   };
 
-  const handleFillBlankSubmit = () => {
+  const handleFillBlankSubmit = async () => {
     if (!fillBlankAnswer.trim()) {
       Alert.alert('שגיאה', 'אנא הזן תשובה');
       return;
     }
 
-    // Compare answers (case insensitive, trimmed)
-    const userAnswer = fillBlankAnswer.trim().toLowerCase();
-    const correctAnswerStr = String(correct).trim().toLowerCase();
-    const isCorrect = userAnswer === correctAnswerStr;
+    setIsCheckingAnswer(true);
 
-    setFillBlankCorrect(isCorrect);
-    setFillBlankSubmitted(true);
+    try {
+      // First try exact match (case insensitive, trimmed)
+      const userAnswer = fillBlankAnswer.trim().toLowerCase();
+      const correctAnswerStr = String(correct).trim().toLowerCase();
+      let isCorrect = userAnswer === correctAnswerStr;
 
-    if (!isCorrect) {
-      setCorrectAnswer(String(correct));
-      setModalVisible(true);
+      // If not exact match, check with AI for semantic similarity
+      if (!isCorrect) {
+        isCorrect = await checkAnswerWithAI(fillBlankAnswer, String(correct), question);
+      }
+
+      setFillBlankCorrect(isCorrect);
+      setAttemptsLeft(prev => prev - 1);
+
+      if (isCorrect) {
+        setFillBlankSubmitted(true);
+        setTimeout(() => {
+          onAnswerSelected(true);
+        }, 500);
+      } else if (attemptsLeft <= 1) {
+        // No more attempts - show correct answer and move on
+        setFillBlankSubmitted(true);
+        setCorrectAnswer(String(correct));
+        setModalVisible(true);
+        onAnswerSelected(false);
+      } else {
+        // Wrong but has more attempts - let them try again
+        Alert.alert(
+          'לא מדויק',
+          `נסה שוב! נותרו ${attemptsLeft - 1} ניסיונות`,
+          [{ text: 'אוקיי', onPress: () => setFillBlankAnswer('') }]
+        );
+      }
+    } catch (error) {
+      console.error('Error checking answer:', error);
+      // Fallback to exact match on error
+      const userAnswer = fillBlankAnswer.trim().toLowerCase();
+      const correctAnswerStr = String(correct).trim().toLowerCase();
+      const isCorrect = userAnswer === correctAnswerStr;
+      
+      setFillBlankCorrect(isCorrect);
+      setFillBlankSubmitted(true);
+      
+      if (!isCorrect) {
+        setCorrectAnswer(String(correct));
+        setModalVisible(true);
+      }
+      
+      setTimeout(() => {
+        onAnswerSelected(isCorrect);
+      }, isCorrect ? 500 : 0);
+    } finally {
+      setIsCheckingAnswer(false);
     }
+  };
 
-    // Delay the callback to allow showing feedback
-    setTimeout(() => {
-      onAnswerSelected(isCorrect);
-    }, isCorrect ? 500 : 0);
+  // Check answer using AI for semantic similarity
+  const checkAnswerWithAI = async (userAnswer: string, correctAnswer: string, questionText: string): Promise<boolean> => {
+    try {
+      const processor = getAIProcessor();
+      const config = (processor as any).config;
+      
+      if (!config?.apiKey || config.provider === 'local') {
+        return false; // No AI available, rely on exact match
+      }
+
+      const prompt = `בדוק האם התשובה של המשתמש נכונה או קרובה מספיק לתשובה הנכונה.
+
+שאלה: ${questionText}
+תשובה נכונה: ${correctAnswer}
+תשובה המשתמש: ${userAnswer}
+
+האם התשובה של המשתמש נכונה או דומה מספיק? התחשב בטעויות כתיב קטנות, מילים נרדפות, וניסוחים שונים של אותו רעיון.
+החזר רק: "כן" או "לא"`;
+
+      let response;
+      
+      if (config.provider === 'groq') {
+        response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: config.model || 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.1,
+            max_tokens: 10,
+          }),
+        });
+      } else if (config.provider === 'gemini') {
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${config.model || 'gemini-2.5-flash'}:generateContent?key=${config.apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.1, maxOutputTokens: 10 },
+            }),
+          }
+        );
+      } else {
+        return false;
+      }
+
+      if (!response.ok) {
+        console.log('AI check failed, falling back to exact match');
+        return false;
+      }
+
+      const data = await response.json();
+      let aiResponse = '';
+      
+      if (config.provider === 'groq') {
+        aiResponse = data.choices?.[0]?.message?.content || '';
+      } else {
+        aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
+
+      console.log('AI answer check response:', aiResponse);
+      return aiResponse.trim().includes('כן');
+    } catch (error) {
+      console.error('AI answer check error:', error);
+      return false;
+    }
   };
 
   // Render fill-blank exercise
@@ -95,14 +213,27 @@ export default function ChoiceExercise({
             placeholderTextColor="#999"
             value={fillBlankAnswer}
             onChangeText={setFillBlankAnswer}
-            editable={!fillBlankSubmitted}
+            editable={!fillBlankSubmitted && !isCheckingAnswer}
             textAlign="right"
           />
           
+          {/* Attempts indicator */}
+          {!fillBlankSubmitted && attemptsLeft < 2 && (
+            <Text style={styles.attemptsText}>נותרו {attemptsLeft} ניסיונות</Text>
+          )}
+          
+          {/* Submit button or loading indicator */}
           {!fillBlankSubmitted && (
-            <Pressable style={styles.submitButton} onPress={handleFillBlankSubmit}>
-              <Text style={styles.submitButtonText}>בדוק</Text>
-            </Pressable>
+            isCheckingAnswer ? (
+              <View style={styles.checkingContainer}>
+                <ActivityIndicator size="small" color="#58CC02" />
+                <Text style={styles.checkingText}>AI בודק את התשובה...</Text>
+              </View>
+            ) : (
+              <Pressable style={styles.submitButton} onPress={handleFillBlankSubmit}>
+                <Text style={styles.submitButtonText}>בדוק</Text>
+              </Pressable>
+            )
           )}
 
           {fillBlankSubmitted && fillBlankCorrect && (
@@ -375,6 +506,26 @@ const styles = StyleSheet.create({
   trueFalseText: {
     fontSize: 20,
     fontWeight: 'bold',
+  },
+  // AI checking styles
+  checkingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+    gap: 10,
+  },
+  checkingText: {
+    fontSize: 16,
+    color: '#58CC02',
+    fontWeight: '500',
+  },
+  attemptsText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 4,
   },
   // Modal styles
   modalOverlay: {

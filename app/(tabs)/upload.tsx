@@ -23,69 +23,51 @@ import { useAuthStore } from '@/stores/authStore';
 import { useContentAndStudyStore } from '@/stores/contentAndStudyStore';
 import { getAIProcessor } from '@/services/AIContentProcessor';
 
-// Helper function to extract text from PDF using Gemini Vision
-const extractTextFromPDFWithAI = async (base64Data: string, apiKey: string): Promise<string> => {
+// Helper function to extract text from PDF locally using pdf-parse
+const extractTextFromPDFLocal = async (arrayBuffer: ArrayBuffer): Promise<string> => {
   try {
-    console.log('Extracting text from PDF using Gemini Vision...');
-    
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            role: 'user',
-            parts: [
-              {
-                inline_data: {
-                  mime_type: 'application/pdf',
-                  data: base64Data
-                }
-              },
-              {
-                text: 'אנא חלץ את כל הטקסט מקובץ ה-PDF הזה. החזר רק את הטקסט עצמו, ללא הערות או תוספות. שמור על המבנה והפסקאות.'
-              }
-            ]
-          }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 8192,
-          },
-        }),
+    // For web, we'll use pdf.js via CDN
+    if (Platform.OS === 'web') {
+      // @ts-ignore - pdfjsLib loaded from CDN
+      const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+      
+      if (!pdfjsLib) {
+        // Load pdf.js dynamically
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Failed to load PDF.js'));
+          document.head.appendChild(script);
+        });
       }
-    );
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      console.error('PDF extraction error:', data?.error?.message);
-      throw new Error(data?.error?.message || 'Failed to extract PDF text');
+      
+      // @ts-ignore
+      const pdfjs = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+      pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      let fullText = '';
+      
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ');
+        fullText += pageText + '\n\n';
+      }
+      
+      return fullText.trim();
+    } else {
+      // For native, we need a different approach
+      // pdf-parse doesn't work directly in React Native
+      throw new Error('PDF extraction not supported on mobile - please paste text manually');
     }
-
-    const extractedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    console.log('PDF text extracted, length:', extractedText.length);
-    return extractedText;
   } catch (error) {
-    console.error('PDF extraction failed:', error);
+    console.error('PDF extraction error:', error);
     throw error;
   }
-};
-
-// Helper functions for file processing (legacy - kept for reference)
-const extractTextFromPDF = async (uri: string): Promise<string> => {
-  // PDF files now handled by extractTextFromPDFWithAI
-  return '';
-};
-
-const extractTextFromWord = async (uri: string): Promise<string> => {
-  // Word files need special handling - for now, return empty and show alert
-  Alert.alert(
-    'קובץ Word',
-    'קריאת Word מוגבלת. מומלץ לפתוח את הקובץ ולהעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
-    [{ text: 'הבנתי' }]
-  );
-  return '';
 };
 
 I18nManager.forceRTL(true);
@@ -155,43 +137,50 @@ export default function UploadContent() {
 
         try {
           if (isPDF) {
-            // Handle PDF files with Gemini Vision API
+            // Extract text from PDF locally using pdf.js
             setUploadProgress('מחלץ טקסט מ-PDF...');
+            console.log('Extracting text from PDF locally...');
             
-            let base64Data = '';
+            let arrayBuffer: ArrayBuffer;
             if (Platform.OS === 'web') {
               if (file.file) {
-                const arrayBuffer = await file.file.arrayBuffer();
-                const bytes = new Uint8Array(arrayBuffer);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) {
-                  binary += String.fromCharCode(bytes[i]);
-                }
-                base64Data = btoa(binary);
+                arrayBuffer = await file.file.arrayBuffer();
+              } else if (file.uri) {
+                const response = await fetch(file.uri);
+                arrayBuffer = await response.arrayBuffer();
               } else {
-                throw new Error('לא ניתן לקרוא את הקובץ בדפדפן זה');
+                throw new Error('לא ניתן לקרוא את הקובץ');
               }
+              
+              fileContent = await extractTextFromPDFLocal(arrayBuffer);
+              console.log('PDF text extracted, length:', fileContent.length);
             } else {
-              base64Data = await FileSystem.readAsStringAsync(
-                file.uri,
-                { encoding: FileSystem.EncodingType.Base64 }
+              // Mobile - show message to paste text
+              Alert.alert(
+                'קובץ PDF',
+                'חילוץ PDF לא נתמך במובייל. אנא פתח את ה-PDF, העתק את הטקסט והדבק אותו דרך כפתור "הדבק טקסט".',
+                [{ text: 'הבנתי' }]
               );
-            }
-            
-            // Get API key from AI processor
-            const processor = getAIProcessor();
-            const apiKey = (processor as any).config?.apiKey || 'AIzaSyCk8Xkm_c8IFG17EolqCsTjPmTVImbiOdM';
-            
-            fileContent = await extractTextFromPDFWithAI(base64Data, apiKey);
-            
-            if (!fileContent || fileContent.trim().length < 50) {
-              throw new Error('לא הצלחנו לחלץ טקסט מספיק מה-PDF');
+              setUploadProgress('');
+              return;
             }
           } else {
             // Handle plain text files
+            console.log('Reading text file, Platform:', Platform.OS);
+            console.log('File object:', file);
+            console.log('File.file exists:', !!file.file);
+            
             if (Platform.OS === 'web') {
               if (file.file) {
+                console.log('Reading file via file.file.text()...');
                 fileContent = await file.file.text();
+                console.log('File content read, length:', fileContent.length);
+              } else if (file.uri) {
+                // Fallback: try to fetch the file URI
+                console.log('Trying to fetch file URI:', file.uri);
+                const response = await fetch(file.uri);
+                fileContent = await response.text();
+                console.log('File content fetched, length:', fileContent.length);
               } else {
                 throw new Error('לא ניתן לקרוא את הקובץ בדפדפן זה');
               }
@@ -204,13 +193,25 @@ export default function UploadContent() {
           }
         } catch (error) {
           console.error('File reading error:', error);
-          Alert.alert(
-            'שגיאה בקריאת קובץ',
-            isPDF 
-              ? 'לא הצלחנו לחלץ טקסט מה-PDF. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".'
-              : 'לא הצלחנו לקרוא את הקובץ. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
-            [{ text: 'הבנתי' }]
-          );
+          
+          const errorMessage = error instanceof Error ? error.message : '';
+          const isQuotaError = errorMessage === 'QUOTA_EXCEEDED' || errorMessage.includes('quota') || errorMessage.includes('429');
+          
+          if (isQuotaError) {
+            Alert.alert(
+              'מכסת API נגמרה',
+              'המערכת הגיעה למגבלת הבקשות. אנא המתן דקה ונסה שוב, או העתק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
+              [{ text: 'הבנתי' }]
+            );
+          } else {
+            Alert.alert(
+              'שגיאה בקריאת קובץ',
+              isPDF 
+                ? 'לא הצלחנו לחלץ טקסט מה-PDF. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".'
+                : 'לא הצלחנו לקרוא את הקובץ. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
+              [{ text: 'הבנתי' }]
+            );
+          }
           setUploadProgress('');
           return;
         }

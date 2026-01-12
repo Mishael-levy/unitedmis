@@ -34,13 +34,14 @@ export default function LessonScreen() {
       if (fetchedLesson) {
         setLesson(fetchedLesson);
         
-        // If lesson has originalContent, generate new exercises
+        // ALWAYS generate new exercises if we have originalContent
+        // This ensures fresh, unique questions each time
         if (fetchedLesson.originalContent) {
-          console.log('Generating exercises from originalContent');
+          console.log('🎯 Generating NEW exercises from originalContent (AI-powered)');
           generateExercises(fetchedLesson);
         } else if (fetchedLesson.exercises && fetchedLesson.exercises.length > 0) {
-          // Use pre-existing exercises (legacy courses)
-          console.log('Using pre-existing exercises:', fetchedLesson.exercises.length);
+          // Use pre-existing exercises only for legacy courses without originalContent
+          console.log('Using pre-existing exercises (legacy course):', fetchedLesson.exercises.length);
           setExercises(fetchedLesson.exercises);
         } else {
           // No exercises available
@@ -94,8 +95,8 @@ export default function LessonScreen() {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.accent} />
-        <Text style={styles.loadingText}>יוצר שאלות חדשות...</Text>
-        <Text style={styles.loadingSubtext}>זה יכול לקחת כמה שניות</Text>
+        <Text style={styles.loadingText}>🤖 AI יוצר שאלות חדשות...</Text>
+        <Text style={styles.loadingSubtext}>כל פעם שאלות שונות ומקוריות!</Text>
       </View>
     );
   }

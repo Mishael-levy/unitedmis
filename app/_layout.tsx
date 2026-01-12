@@ -25,10 +25,12 @@ export default function RootLayout() {
   const Items = useArrayStore((state) => state.items);
 
   useEffect(() => {
+    // Use Groq API for AI-powered exercise generation (free!)
+    // Get your free API key at: https://console.groq.com/keys
     initializeAIProcessor({ 
-      provider: 'gemini',
-      apiKey: 'AIzaSyCk8Xkm_c8IFG17EolqCsTjPmTVImbiOdM',
-      model: 'gemini-2.5-flash',
+      provider: 'groq',
+      apiKey: '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',
+      model: 'llama-3.3-70b-versatile', // Free, fast, and great for Hebrew
     });
   }, []);
 

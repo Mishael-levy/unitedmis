@@ -9,11 +9,11 @@ import {
 
 /**
  * Service for integrating with AI APIs to generate exercises from uploaded content
- * Supports multiple AI providers: OpenAI, Anthropic Claude, Google Gemini, or local solution
+ * Supports multiple AI providers: OpenAI, Anthropic Claude, Google Gemini, Groq, or local solution
  */
 
 interface AIConfig {
-  provider: 'openai' | 'claude' | 'gemini' | 'local';
+  provider: 'openai' | 'claude' | 'gemini' | 'groq' | 'local';
   apiKey?: string;
   apiEndpoint?: string;
   model?: string;
@@ -116,24 +116,50 @@ class AIContentProcessor {
   }
 
   /**
-   * Extract key topics from content
+   * Extract key topics from content - IMPROVED
    */
   private extractKeyTopics(content: string, subject: string): string[] {
-    // Simple keyword extraction - in production, use NLP
+    // Filter common Hebrew words that aren't meaningful topics
+    const commonWords = [
+      'את', 'של', 'על', 'עם', 'לא', 'גם', 'או', 'כי', 'אם', 'הוא', 'היא', 'הם', 'הן',
+      'זה', 'זו', 'אלה', 'כל', 'רק', 'עוד', 'מה', 'מי', 'איך', 'למה', 'כמה', 'אבל',
+      'אך', 'לכן', 'משום', 'היה', 'היו', 'יהיה', 'להיות', 'אותו', 'אותה', 'אלו',
+      'כאשר', 'בין', 'תוך', 'אחרי', 'לפני', 'כמו', 'יותר', 'פחות', 'כדי', 'באופן',
+      'לפי', 'בכל', 'עצמו', 'עצמה', 'שלו', 'שלה', 'שלהם', 'מכל', 'אצל', 'נגד',
+      'בלי', 'עד', 'מתוך', 'לגבי', 'במקום', 'בזמן', 'הזה', 'הזו', 'הזאת', 'ההוא',
+      'שהוא', 'שהיא', 'שהם', 'שהן', 'כבר', 'עדיין', 'כלל', 'בכלל', 'ממש', 'מאוד',
+      'הרבה', 'קצת', 'בערך', 'אולי', 'כנראה', 'בטח', 'ודאי', 'מעט', 'מספיק',
+      'להם', 'להן', 'לנו', 'לכם', 'אליו', 'אליה', 'אליהם', 'אלינו', 'ממנו', 'ממנה',
+      'איזה', 'איזו', 'אילו', 'שום', 'משהו', 'מישהו', 'כלום', 'אף', 'כזה', 'כזו',
+      'such', 'that', 'this', 'with', 'from', 'have', 'been', 'were', 'will', 'would',
+      'could', 'should', 'there', 'their', 'about', 'which', 'when', 'where', 'what',
+    ];
+    
     const words = content
-      .toLowerCase()
       .split(/\s+/)
-      .filter((w) => w.length > 4);
+      .map(w => w.replace(/[.,;:!?()"\[\]{}]/g, '')) // Remove punctuation
+      .filter((w) => w.length > 3 && !commonWords.includes(w.toLowerCase()));
 
     const frequency: { [key: string]: number } = {};
 
     words.forEach((word) => {
-      frequency[word] = (frequency[word] || 0) + 1;
+      // Normalize word but keep original case for display
+      const normalized = word.toLowerCase();
+      if (!frequency[normalized]) {
+        frequency[normalized] = 0;
+      }
+      frequency[normalized]++;
     });
 
+    // Get top words by frequency, prefer longer words
     return Object.entries(frequency)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 10)
+      .filter(([word, count]) => count >= 2 || word.length > 5) // Must appear twice or be longer
+      .sort(([wordA, countA], [wordB, countB]) => {
+        // Sort by count, then by word length
+        if (countB !== countA) return countB - countA;
+        return wordB.length - wordA.length;
+      })
+      .slice(0, 15)
       .map(([word]) => word);
   }
 
@@ -239,7 +265,18 @@ ${examplesSection}
 סוגי תרגילים אפשריים: multiple-choice, true-false, fill-blank
 רמות קושי: easy, medium, hard`;
 
-    // Try Gemini first (if configured as primary)
+    // Try Groq first (if configured as primary) - it's free and fast!
+    if (this.config.provider === 'groq' && this.config.apiKey) {
+      console.log('🟢 Attempting Groq API...');
+      const groqResult = await this.callGroqAPI(prompt, request.contentId, analysis);
+      if (groqResult) {
+        console.log('✅ Groq API succeeded');
+        return groqResult;
+      }
+      console.log('❌ Groq API failed');
+    }
+
+    // Try Gemini (if configured as primary)
     if (this.config.provider === 'gemini' && this.config.apiKey) {
       console.log('🔵 Attempting Gemini API...');
       const geminiResult = await this.callGeminiAPI(prompt, request.contentId, analysis);
@@ -267,6 +304,59 @@ ${examplesSection}
     // Fallback to local generation
     console.log('🟠 Falling back to local generation...');
     return this.generateLocalExercises(content, analysis, request);
+  }
+
+  /**
+   * Call Groq API - Free and fast AI!
+   */
+  private async callGroqAPI(
+    prompt: string,
+    contentId: string,
+    analysis: any
+  ): Promise<GeneratedExercise[] | null> {
+    try {
+      const model = this.config.model || 'llama-3.3-70b-versatile';
+      
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            {
+              role: 'system',
+              content: 'אתה עוזר ליצירת תרגילים חינוכיים בעברית. תמיד החזר JSON תקין בלבד.'
+            },
+            { 
+              role: 'user', 
+              content: prompt 
+            }
+          ],
+          temperature: 0.8,
+          max_tokens: 4096,
+        }),
+      });
+
+      const data = await response.json();
+      console.log('Groq API response status:', response.status);
+
+      if (!response.ok) {
+        const errorMessage = data?.error?.message || 'Unknown Groq API error';
+        console.error('Groq API error:', errorMessage);
+        return null;
+      }
+
+      const responseText = data.choices?.[0]?.message?.content || '';
+      console.log('Groq response length:', responseText.length);
+      return this.parseExercisesFromResponse(responseText, contentId, analysis);
+      
+    } catch (error) {
+      console.error('Groq API error:', error);
+      return null;
+    }
   }
 
   /**
@@ -540,7 +630,7 @@ ${examplesSection}
   }
 
   /**
-   * Create multiple choice exercise
+   * Create multiple choice exercise - IMPROVED with variety
    */
   private createMultipleChoice(
     content: string,
@@ -549,8 +639,26 @@ ${examplesSection}
     topic: string,
     index: number
   ): GeneratedExercise {
-    // Extract a sentence from the content
     const sentences = content.split(/[.!?]+/).filter((s) => s && s.trim().length > 20);
+    
+    // Question templates for variety
+    const questionTemplates = [
+      { template: 'definition', prefix: 'מהי ההגדרה הנכונה של' },
+      { template: 'meaning', prefix: 'מה המשמעות של' },
+      { template: 'purpose', prefix: 'מהי המטרה העיקרית של' },
+      { template: 'characteristic', prefix: 'מה מאפיין את' },
+      { template: 'difference', prefix: 'מה ההבדל בין' },
+      { template: 'example', prefix: 'מהי דוגמה ל' },
+      { template: 'result', prefix: 'מה התוצאה של' },
+      { template: 'reason', prefix: 'מדוע' },
+      { template: 'when', prefix: 'מתי משתמשים ב' },
+      { template: 'who', prefix: 'מי אחראי על' },
+      { template: 'where', prefix: 'היכן מתבצע' },
+      { template: 'how', prefix: 'כיצד פועל' },
+    ];
+    
+    const templateIndex = index % questionTemplates.length;
+    const selectedTemplate = questionTemplates[templateIndex];
     
     if (sentences.length === 0) {
       const fallbackOptions = [topic, 'מושג אחר', 'רעיון שונה', 'תפיסה נוספת'];
@@ -559,38 +667,79 @@ ${examplesSection}
         id: `ex-mc-${index}-${Date.now()}`,
         contentId: '',
         type: 'multiple-choice',
-        question: `מהו המושג המרכזי הקשור ל${topic} ב${subject}?`,
+        question: `${selectedTemplate.prefix} "${topic}" בתחום ${subject}?`,
         options: shuffled.options,
         correctAnswer: shuffled.correctIndex,
-        explanation: `התשובה הנכונה היא "${topic}" כי זה המושג המרכזי בחומר הלימוד.`,
+        explanation: `התשובה הנכונה היא "${topic}".`,
         difficulty,
         topic,
         keywords: [topic],
       };
     }
     
-    const sentenceIndex = index % sentences.length;
+    // Pick different sentence based on index
+    const sentenceIndex = (index * 7) % sentences.length;
     const baseSentence = sentences[sentenceIndex].trim();
     
-    // Extract key words from the sentence
-    const words = baseSentence.split(/\s+/).filter((w) => w && w.length > 3);
-    const keyWord = words.length > 0 ? words[Math.floor(words.length / 2)] : topic;
-
-    const question = `על פי החומר, ${baseSentence.slice(0, 100)}... מהו המושג המרכזי?`;
-
-    // Generate options based on content
-    const correctOption = keyWord;
-    const distractors = words.slice(0, 3).filter(w => w !== keyWord);
+    // Extract meaningful words (filter short and common words)
+    const commonWords = ['את', 'של', 'על', 'עם', 'לא', 'גם', 'או', 'כי', 'אם', 'הוא', 'היא', 'הם', 'הן', 'זה', 'זו', 'אלה', 'כל', 'רק', 'עוד', 'מה', 'מי', 'איך', 'למה', 'כמה', 'אבל', 'אך', 'לכן', 'משום', 'היה', 'היו', 'יהיה', 'להיות', 'אותו', 'אותה', 'אלו', 'כאשר', 'בין', 'תוך', 'אחרי', 'לפני', 'כמו', 'יותר', 'פחות'];
+    const words = baseSentence.split(/\s+/).filter((w) => w && w.length > 3 && !commonWords.includes(w));
     
-    // Create options array with correct answer at index 0 initially
-    const options = [
-      correctOption,
-      distractors[0] || 'אופציה 1',
-      distractors[1] || 'אופציה 2',
-      distractors[2] || 'אופציה 3',
-    ];
+    // Create varied questions based on template
+    let question = '';
+    let correctOption = '';
+    let distractors: string[] = [];
     
-    // Shuffle options and track correct answer position
+    if (words.length >= 3) {
+      const keyWordIndex = Math.floor(Math.random() * Math.min(words.length, 5));
+      correctOption = words[keyWordIndex];
+      
+      // Get other words as distractors
+      distractors = words.filter((w, i) => i !== keyWordIndex && w !== correctOption).slice(0, 3);
+      
+      // Fill missing distractors
+      while (distractors.length < 3) {
+        distractors.push(`אפשרות ${distractors.length + 1}`);
+      }
+      
+      // Create question based on template type
+      switch (selectedTemplate.template) {
+        case 'definition':
+          question = `על פי החומר, מהי ההגדרה הנכונה הקשורה ל"${topic}"?`;
+          break;
+        case 'meaning':
+          question = `מה המשמעות של הביטוי שמופיע בחומר בהקשר של "${topic}"?`;
+          break;
+        case 'purpose':
+          question = `מהי המטרה העיקרית של "${correctOption}" כפי שמתואר בחומר?`;
+          distractors = ['לשפר תהליכים', 'למנוע בעיות', 'ליצור הזדמנויות'];
+          break;
+        case 'characteristic':
+          question = `איזה מאפיין מתאר את "${topic}" על פי החומר?`;
+          break;
+        case 'result':
+          question = `מה קורה כתוצאה מ${baseSentence.slice(0, 40)}...?`;
+          break;
+        case 'reason':
+          question = `מדוע ${baseSentence.slice(0, 50)}...?`;
+          break;
+        case 'when':
+          question = `מתי מתרחש התהליך המתואר בחומר בהקשר של "${topic}"?`;
+          distractors = ['בתחילת התהליך', 'בסוף התהליך', 'לפני ההכנה'];
+          break;
+        case 'how':
+          question = `כיצד מתבצע ${baseSentence.slice(0, 40)}...?`;
+          break;
+        default:
+          question = `על פי החומר בנושא "${topic}": ${baseSentence.slice(0, 60)}... מהי המילה הנכונה?`;
+      }
+    } else {
+      correctOption = topic;
+      distractors = ['אפשרות א', 'אפשרות ב', 'אפשרות ג'];
+      question = `${selectedTemplate.prefix} "${topic}" על פי החומר?`;
+    }
+    
+    const options = [correctOption, ...distractors.slice(0, 3)];
     const shuffled = this.shuffleOptionsWithAnswer(options, 0);
     
     return {
@@ -600,10 +749,10 @@ ${examplesSection}
       question,
       options: shuffled.options,
       correctAnswer: shuffled.correctIndex,
-      explanation: `התשובה הנכונה היא "${correctOption}" כי זה המושג המרכזי שמוזכר בחומר הלימוד בהקשר של ${topic}.`,
+      explanation: `התשובה הנכונה היא "${correctOption}".`,
       difficulty,
       topic,
-      keywords: [topic, keyWord],
+      keywords: [topic, correctOption],
     };
   }
 
@@ -630,7 +779,7 @@ ${examplesSection}
   }
 
   /**
-   * Create fill-in-the-blank exercise
+   * Create fill-in-the-blank exercise - IMPROVED with variety
    */
   private createFillBlank(
     content: string,
@@ -641,55 +790,66 @@ ${examplesSection}
   ): GeneratedExercise {
     const sentences = content.split(/[.!?]+/).filter((s) => s && s.trim().length > 20);
     
+    // Different fill-blank templates
+    const templates = [
+      { type: 'complete', prefix: 'השלם את המשפט:' },
+      { type: 'missing', prefix: 'מהי המילה החסרה:' },
+      { type: 'define', prefix: 'השלם את ההגדרה:' },
+      { type: 'connect', prefix: 'השלם את הקשר:' },
+    ];
+    
+    const selectedTemplate = templates[index % templates.length];
+    
     if (sentences.length === 0) {
       return {
         id: `ex-fb-${index}-${Date.now()}`,
         contentId: '',
         type: 'fill-blank',
-        question: `השלם: התוכן עוסק ב_____ בתחום ${subject}`,
+        question: `${selectedTemplate.prefix} התוכן בנושא ${subject} עוסק ב_____`,
         correctAnswer: topic,
-        explanation: `המילה החסרה היא "${topic}" כפי שמופיע בחומר הלימוד.`,
+        explanation: `המילה החסרה היא "${topic}".`,
         difficulty,
         topic,
         keywords: [topic],
       };
     }
     
-    const sentenceIndex = (index * 3) % sentences.length;
+    // Use different sentences for variety
+    const sentenceIndex = (index * 5 + 3) % sentences.length;
     const sentence = sentences[sentenceIndex].trim();
-    const words = sentence.split(/\s+/).filter(w => w && w.length > 2);
+    
+    // Filter common Hebrew words
+    const commonWords = ['את', 'של', 'על', 'עם', 'לא', 'גם', 'או', 'כי', 'אם', 'הוא', 'היא', 'הם', 'הן', 'זה', 'זו', 'כל', 'רק', 'עוד', 'היה', 'היו', 'אלה', 'אלו', 'כאשר', 'בין', 'תוך', 'אחרי', 'לפני', 'כמו'];
+    const words = sentence.split(/\s+/).filter(w => w && w.length > 3 && !commonWords.includes(w));
     
     if (words.length < 3) {
       return {
         id: `ex-fb-${index}-${Date.now()}`,
         contentId: '',
         type: 'fill-blank',
-        question: `השלם: ${sentence} _____`,
+        question: `${selectedTemplate.prefix} ${sentence} מתייחס ל_____`,
         correctAnswer: topic,
-        explanation: `המילה החסרה קשורה למושג ${topic}.`,
+        explanation: `המילה החסרה קשורה ל${topic}.`,
         difficulty,
         topic,
         keywords: [topic],
       };
     }
     
-    const blankIndex = Math.floor(words.length / 2);
+    // Pick meaningful word to blank out (not first or last)
+    const blankIndex = 1 + Math.floor(Math.random() * (words.length - 2));
     const correctAnswer = words[blankIndex];
     
     // Create sentence with blank
-    const sentenceWithBlank = [
-      ...words.slice(0, blankIndex),
-      '_____',
-      ...words.slice(blankIndex + 1)
-    ].join(' ');
+    const sentenceWithBlank = sentence.replace(correctAnswer, '_____');
     
     return {
       id: `ex-fb-${index}-${Date.now()}`,
       contentId: '',
       type: 'fill-blank',
-      question: `השלם את המשפט: ${sentenceWithBlank}`,
+      question: `${selectedTemplate.prefix} ${sentenceWithBlank}`,
       correctAnswer,
-      explanation: `המילה החסרה היא "${correctAnswer}" כפי שמופיע בחומר הלימוד. זה קשור למושג ${topic}.`,
+      explanation: `המילה החסרה היא "${correctAnswer}".`,
       difficulty,
       topic,
       keywords: [topic, correctAnswer],
@@ -730,7 +890,7 @@ ${examplesSection}
   }
 
   /**
-   * Create true/false exercise
+   * Create true/false exercise - IMPROVED with variety and false statements
    */
   private createTrueFalse(
     content: string,
@@ -741,30 +901,85 @@ ${examplesSection}
   ): GeneratedExercise {
     const sentences = content.split(/[.!?]+/).filter((s) => s && s.trim().length > 20);
     
+    // Alternate between true and false questions
+    const shouldBeFalse = index % 2 === 1;
+    
+    // Templates for variety
+    const trueTemplates = [
+      'נכון או לא נכון:',
+      'האם המשפט הבא נכון?',
+      'קבע אם הטענה הבאה נכונה:',
+      'בדוק את נכונות הטענה:',
+    ];
+    
+    const template = trueTemplates[index % trueTemplates.length];
+    
     if (sentences.length === 0) {
       return {
         id: `ex-tf-${index}-${Date.now()}`,
         contentId: '',
         type: 'true-false',
-        question: `נכון או לא נכון: התוכן קשור ל${topic}`,
-        correctAnswer: 'true',
-        explanation: `המשפט מתייחס למושג ${topic} בהקשר של ${subject}.`,
+        question: `${template} התוכן עוסק בנושא ${topic} בתחום ${subject}`,
+        correctAnswer: 'נכון',
+        explanation: `המשפט נכון.`,
         difficulty,
         topic,
         keywords: [topic],
       };
     }
     
-    const sentenceIndex = (index * 2) % sentences.length;
-    const statement = sentences[sentenceIndex].trim();
+    // Pick different sentence
+    const sentenceIndex = (index * 3 + 2) % sentences.length;
+    let statement = sentences[sentenceIndex].trim();
+    
+    if (shouldBeFalse) {
+      // Create a false statement by modifying the original
+      const modifications = [
+        { find: /תמיד/g, replace: 'אף פעם לא' },
+        { find: /חייב/g, replace: 'אסור' },
+        { find: /ראשון/g, replace: 'אחרון' },
+        { find: /לפני/g, replace: 'אחרי' },
+        { find: /יותר/g, replace: 'פחות' },
+        { find: /גדול/g, replace: 'קטן' },
+        { find: /חשוב/g, replace: 'לא חשוב' },
+      ];
+      
+      let modified = false;
+      for (const mod of modifications) {
+        if (mod.find.test(statement)) {
+          statement = statement.replace(mod.find, mod.replace);
+          modified = true;
+          break;
+        }
+      }
+      
+      // If no modification was made, add "לא" or change meaning
+      if (!modified) {
+        if (statement.length > 30) {
+          statement = statement.slice(0, 30) + ' - זה לא קשור ל' + subject;
+        }
+      }
+      
+      return {
+        id: `ex-tf-${index}-${Date.now()}`,
+        contentId: '',
+        type: 'true-false',
+        question: `${template} ${statement}`,
+        correctAnswer: 'לא נכון',
+        explanation: `המשפט אינו נכון על פי החומר.`,
+        difficulty,
+        topic,
+        keywords: [topic],
+      };
+    }
     
     return {
       id: `ex-tf-${index}-${Date.now()}`,
       contentId: '',
       type: 'true-false',
-      question: `נכון או לא נכון: ${statement}`,
-      correctAnswer: 'true',
-      explanation: `המשפט הזה מופיע בחומר הלימוד ולכן הוא נכון. הוא מתייחס למושג ${topic} בהקשר של ${subject}.`,
+      question: `${template} ${statement}`,
+      correctAnswer: 'נכון',
+      explanation: `המשפט נכון על פי החומר.`,
       difficulty,
       topic,
       keywords: [topic],
