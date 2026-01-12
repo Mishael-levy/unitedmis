@@ -8,8 +8,9 @@ import {
   doc,
   getDoc,
 } from 'firebase/firestore';
-import { Lesson } from '@/types/data'; // Ensure Lesson type is properly defined
+import { Lesson } from '@/types/data';
 import { db } from '@/configs/FirebaseConfig';
+import useCourseStore from './courseStore';
 
 interface LessonState {
   lessons: Lesson[];
@@ -50,6 +51,35 @@ const useLessonStore = create<LessonState>((set, get) => ({
 
   fetchLesson: async (id) => {
     set({ loading: true, error: null });
+    
+    // First check if it's a local lesson (from custom course)
+    if (id.startsWith('lesson-')) {
+      const { localCourses, courses } = useCourseStore.getState();
+      
+      // Check in local courses first
+      for (const course of localCourses) {
+        const lesson = course.lessons.find(l => l.id === id);
+        if (lesson) {
+          set({ loading: false });
+          return lesson;
+        }
+      }
+      
+      // Also check Firebase courses (they might have local-style IDs)
+      if (courses) {
+        for (const course of courses) {
+          const courseWithLessons = course as any;
+          if (courseWithLessons.lessons && Array.isArray(courseWithLessons.lessons)) {
+            const lesson = courseWithLessons.lessons.find((l: any) => l.id === id);
+            if (lesson) {
+              set({ loading: false });
+              return lesson;
+            }
+          }
+        }
+      }
+    }
+    
     try {
       const lessonDoc = doc(db, 'lessons', id);
       const lessonSnapshot = await getDoc(lessonDoc);

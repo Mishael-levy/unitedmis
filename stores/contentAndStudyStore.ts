@@ -17,7 +17,14 @@ import {
   StudySet,
   GeneratedExercise,
   UserProgress,
+  QuestionFeedback,
+  FeedbackRating,
+  FeedbackReason,
+  ExerciseType,
 } from '@/types/ai-learning';
+
+// Import courseStore for cross-store updates
+import useCourseStore from './courseStore';
 
 interface ContentAndStudyState {
   // Uploaded Content
@@ -27,6 +34,7 @@ interface ContentAndStudyState {
   // Study Sets
   studySets: StudySet[];
   currentSet: StudySet | null;
+  localStudySets: StudySet[]; // For guest mode
 
   // User Progress
   userProgress: UserProgress[];
@@ -52,6 +60,7 @@ interface ContentAndStudyState {
   fetchStudySet: (setId: string) => Promise<void>;
   deleteStudySet: (setId: string) => Promise<void>;
   updateStudySet: (setId: string, updates: Partial<StudySet>) => Promise<void>;
+  setLocalStudySet: (studySet: StudySet) => void; // For guest mode
 
   // Progress Methods
   recordProgress: (progress: UserProgress) => Promise<void>;
@@ -60,6 +69,18 @@ interface ContentAndStudyState {
     userId: string,
     exerciseId: string
   ) => Promise<UserProgress | null>;
+
+  // Question Feedback Methods
+  submitQuestionFeedback: (feedback: {
+    exerciseId: string;
+    userId: string;
+    rating: FeedbackRating;
+    reason?: FeedbackReason;
+    questionText: string;
+    questionType: ExerciseType;
+    subject: string;
+  }) => Promise<void>;
+  fetchGoodQuestionExamples: (subject: string, limit?: number) => Promise<QuestionFeedback[]>;
 }
 
 const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
@@ -67,6 +88,7 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
   currentContent: null,
   studySets: [],
   currentSet: null,
+  localStudySets: [], // For guest mode
   userProgress: [],
   loading: false,
   error: null,
@@ -76,15 +98,26 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
   uploadContent: async (content) => {
     try {
       set({ loading: true, error: null });
-      const contentRef = await addDoc(collection(db, 'uploadedContents'), {
-        ...content,
+      
+      // Clean the data - remove undefined fields
+      const cleanData = {
+        userId: content.userId,
+        fileName: content.fileName,
+        fileType: content.fileType,
+        fileUrl: content.fileUrl || '',
+        title: content.title,
+        description: content.description || '',
+        subject: content.subject,
         uploadedAt: Date.now(),
-        status: 'processing',
-      });
+        status: 'processing' as const,
+      };
+      
+      const contentRef = await addDoc(collection(db, 'uploadedContents'), cleanData);
+      
       set((state) => ({
         uploadedContents: [
           ...state.uploadedContents,
-          { id: contentRef.id, ...content, uploadedAt: Date.now(), status: 'processing' },
+          { id: contentRef.id, ...cleanData },
         ],
       }));
       return contentRef.id;
@@ -149,15 +182,18 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
 
       const batch = writeBatch(db);
       batch.delete(docRef);
-      setsSnapshot.docs.forEach((doc) => batch.delete(doc.ref));
+      setsSnapshot.docs.forEach((setDoc) => batch.delete(setDoc.ref));
       await batch.commit();
 
+      // Update local state - remove content and associated study sets
       set((state) => ({
         uploadedContents: state.uploadedContents.filter((c) => c.id !== contentId),
+        studySets: state.studySets.filter((s) => s.contentId !== contentId),
       }));
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to delete content';
       set({ error: errorMsg });
+      throw error;
     } finally {
       set({ loading: false });
     }
@@ -186,20 +222,82 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
   createStudySet: async (studySet) => {
     try {
       set({ loading: true, error: null });
-      const setRef = await addDoc(collection(db, 'studySets'), {
-        ...studySet,
+      
+      // Log original exercises to see what we're getting
+      console.log('Original exercises sample:', studySet.exercises?.[0]);
+      
+      // Clean the data - remove undefined fields
+      const cleanExercises = (studySet.exercises || []).map((ex, idx) => {
+        const cleaned = {
+          id: ex.id || `ex-${idx}`,
+          contentId: ex.contentId || studySet.contentId,
+          type: ex.type || 'multiple-choice',
+          question: ex.question || '',
+          options: Array.isArray(ex.options) ? ex.options.filter(opt => opt !== undefined && opt !== null) : [],
+          correctAnswer: ex.correctAnswer !== undefined && ex.correctAnswer !== null ? ex.correctAnswer : '',
+          explanation: ex.explanation || '',
+          difficulty: ex.difficulty || 'medium',
+          topic: ex.topic || '',
+          keywords: Array.isArray(ex.keywords) ? ex.keywords.filter(kw => kw !== undefined && kw !== null) : [],
+        };
+        
+        return cleaned;
+      });
+
+      const cleanData = {
+        userId: studySet.userId || '',
+        contentId: studySet.contentId || '',
+        title: studySet.title || '',
+        description: studySet.description || '',
+        subject: studySet.subject || '',
+        exercises: cleanExercises,
+        completedExercises: studySet.completedExercises || 0,
+        totalExercises: studySet.totalExercises || 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-      });
+      };
+      
+      // Deep check for undefined
+      const findUndefined = (obj: any, path = ''): string[] => {
+        const problems: string[] = [];
+        if (obj === undefined) {
+          problems.push(path);
+        } else if (Array.isArray(obj)) {
+          obj.forEach((item, i) => {
+            problems.push(...findUndefined(item, `${path}[${i}]`));
+          });
+        } else if (obj && typeof obj === 'object') {
+          Object.entries(obj).forEach(([key, value]) => {
+            if (value === undefined) {
+              problems.push(`${path}.${key}`);
+            } else {
+              problems.push(...findUndefined(value, path ? `${path}.${key}` : key));
+            }
+          });
+        }
+        return problems;
+      };
+      
+      const undefinedPaths = findUndefined(cleanData);
+      if (undefinedPaths.length > 0) {
+        console.error('Found undefined at:', undefinedPaths);
+        throw new Error(`Undefined fields found: ${undefinedPaths.join(', ')}`);
+      }
+      
+      console.log('Clean data validated, uploading to Firebase...');
+      
+      const setRef = await addDoc(collection(db, 'studySets'), cleanData);
+      
       set((state) => ({
         studySets: [
           ...state.studySets,
-          { id: setRef.id, ...studySet, createdAt: Date.now(), updatedAt: Date.now() },
+          { id: setRef.id, ...cleanData },
         ],
       }));
       return setRef.id;
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to create study set';
+      console.error('Error creating study set:', errorMsg, error);
       set({ error: errorMsg });
       throw error;
     } finally {
@@ -228,6 +326,20 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
   fetchStudySet: async (setId) => {
     try {
       set({ loading: true, error: null });
+      console.log('fetchStudySet: looking for setId =', setId);
+      console.log('fetchStudySet: localStudySets =', get().localStudySets.map(s => s.id));
+      
+      // First check if it's a local study set (guest mode)
+      if (setId.startsWith('local-')) {
+        const localSet = get().localStudySets.find(s => s.id === setId);
+        console.log('fetchStudySet: found local set?', !!localSet, localSet ? { id: localSet.id, exercisesCount: localSet.exercises?.length } : null);
+        if (localSet) {
+          set({ currentSet: localSet, loading: false });
+          return;
+        }
+      }
+      
+      // Otherwise fetch from Firebase
       const docRef = doc(db, 'studySets', setId);
       const snapshot = await getDoc(docRef);
       if (snapshot.exists()) {
@@ -243,17 +355,43 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
     }
   },
 
+  setLocalStudySet: (studySet) => {
+    set((state) => ({
+      localStudySets: [...state.localStudySets, studySet],
+      currentSet: studySet,
+    }));
+  },
+
   deleteStudySet: async (setId) => {
     try {
       set({ loading: true, error: null });
+      
+      // Handle local study sets (guest mode)
+      if (setId.startsWith('local-')) {
+        set((state) => ({
+          localStudySets: state.localStudySets.filter((s) => s.id !== setId),
+          loading: false,
+        }));
+        
+        // Also update any courses that reference this study set
+        useCourseStore.getState().removeLessonByStudySetId(setId);
+        
+        return;
+      }
+      
       const docRef = doc(db, 'studySets', setId);
       await deleteDoc(docRef);
       set((state) => ({
         studySets: state.studySets.filter((s) => s.id !== setId),
       }));
+      
+      // Also update any courses that reference this study set
+      useCourseStore.getState().removeLessonByStudySetId(setId);
+      
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to delete study set';
       set({ error: errorMsg });
+      throw error;
     } finally {
       set({ loading: false });
     }
@@ -326,6 +464,57 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
       const errorMsg = error instanceof Error ? error.message : 'Failed to fetch exercise progress';
       set({ error: errorMsg });
       return null;
+    }
+  },
+
+  // ============ QUESTION FEEDBACK METHODS ============
+
+  submitQuestionFeedback: async (feedback) => {
+    try {
+      const feedbackData: Omit<QuestionFeedback, 'id'> = {
+        exerciseId: feedback.exerciseId,
+        userId: feedback.userId,
+        rating: feedback.rating,
+        questionText: feedback.questionText,
+        questionType: feedback.questionType,
+        subject: feedback.subject,
+        createdAt: Date.now(),
+      };
+
+      // Only include reason if it exists (for 'bad' ratings)
+      if (feedback.reason) {
+        feedbackData.reason = feedback.reason;
+      }
+
+      await addDoc(collection(db, 'questionFeedback'), feedbackData);
+      console.log('Question feedback submitted:', feedback.rating);
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to submit feedback';
+      console.error('Error submitting feedback:', errorMsg);
+    }
+  },
+
+  fetchGoodQuestionExamples: async (subject, limit = 5) => {
+    try {
+      // Fetch questions with positive feedback for the given subject
+      const q = query(
+        collection(db, 'questionFeedback'),
+        where('rating', '==', 'good'),
+        where('subject', '==', subject)
+      );
+      const snapshot = await getDocs(q);
+      
+      const goodExamples = snapshot.docs
+        .map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        } as QuestionFeedback))
+        .slice(0, limit);
+      
+      return goodExamples;
+    } catch (error: unknown) {
+      console.error('Error fetching good examples:', error);
+      return [];
     }
   },
 }));

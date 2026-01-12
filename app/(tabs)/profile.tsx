@@ -45,6 +45,7 @@ export default function ProfileScreen() {
   };
 
   const user = useAuthStore((state) => state.user);
+  const isGuest = useAuthStore((state) => state.isGuest);
   const logout = useAuthStore((state) => state.logout);
 
   const [avatar, setAvatar] = useState(user?.avatar || '');
@@ -53,6 +54,10 @@ export default function ProfileScreen() {
 
   const HandleLogout = () => {
     logout();
+  };
+
+  const HandleLogin = () => {
+    console.log('Navigating to login...');
     router.replace('/auth/login');
   };
 
@@ -73,6 +78,16 @@ export default function ProfileScreen() {
       {/* User Information */}
       <Text style={styles.username}>{user?.name || 'אורח'}</Text>
       <Text style={styles.email}>{user?.email || 'לא מחובר עדיין'}</Text>
+
+      {/* Guest Mode Banner */}
+      {isGuest && (
+        <View style={styles.guestBanner}>
+          <Ionicons name="information-circle" size={20} color="#1976d2" />
+          <Text style={styles.guestBannerText}>
+            אתה במצב אורח. התחבר כדי לשמור את ההתקדמות שלך!
+          </Text>
+        </View>
+      )}
 
       {/* Streak, Hearts, and Gems */}
       {/* <View style={styles.statsContainer}>
@@ -101,7 +116,7 @@ export default function ProfileScreen() {
       <View style={styles.badgesContainer}>
         <Text style={styles.sectionTitle}> ההישגים שלי: </Text>
         <View style={styles.badgesList}>
-          {(user.badges).map((badge) => (
+          {(user.badges || []).map((badge) => (
             <View key={badge.id} style={styles.badgeItem}>
               {/* <Ionicons
                 name={badge.icon as any}
@@ -116,17 +131,23 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      {/* logout */}
-      <CustomButton title="התנתק" handlePress={HandleLogout} />
-
-      {/* delete account */}
-      <View style={styles.logoutButton}>
-        <CustomButton
-          title="מחק חשבון"
-          backgroundColor={'red'}
-          handlePress={HandleDeleteAccount}
-        />
-      </View>
+      {/* logout / login */}
+      {isGuest ? (
+        <CustomButton title="התחבר לחשבון" handlePress={HandleLogin} />
+      ) : (
+        <>
+          <CustomButton title="התנתק" handlePress={HandleLogout} />
+          
+          {/* delete account - only for logged in users */}
+          <View style={styles.logoutButton}>
+            <CustomButton
+              title="מחק חשבון"
+              backgroundColor={'red'}
+              handlePress={HandleDeleteAccount}
+            />
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -143,6 +164,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 10,
     color: Colors.text,
+  },
+  guestBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f2fd',
+    padding: 12,
+    borderRadius: 8,
+    marginHorizontal: 20,
+    marginVertical: 10,
+    gap: 8,
+  },
+  guestBannerText: {
+    color: '#1976d2',
+    fontSize: 14,
+    flex: 1,
+    textAlign: 'right',
   },
   badgesSection: {
     alignSelf: 'stretch',

@@ -16,6 +16,7 @@ import { useContentAndStudyStore } from '@/stores/contentAndStudyStore';
 import { useAuthStore } from '@/stores/authStore';
 import ExerciseViewer from '@/components/Exercise/ExerciseViewer';
 import { GeneratedExercise } from '@/types/ai-learning';
+import { getAIProcessor } from '@/services/AIContentProcessor';
 
 I18nManager.forceRTL(true);
 
@@ -23,28 +24,106 @@ export default function StudySet() {
   const router = useRouter();
   const { setId } = useLocalSearchParams();
   const user = useAuthStore((state) => state.user);
-  const { currentSet, fetchStudySet, loading } = useContentAndStudyStore();
+  const { currentSet, fetchStudySet, fetchGoodQuestionExamples, loading } = useContentAndStudyStore();
 
   const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, any>>({});
   const [showExplanation, setShowExplanation] = useState(false);
+  const [generatedExercises, setGeneratedExercises] = useState<GeneratedExercise[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
+  // First, load the study set metadata
   useEffect(() => {
+    console.log('study-set: setId =', setId);
     if (setId && typeof setId === 'string') {
       fetchStudySet(setId);
     }
   }, [setId]);
 
-  if (loading) {
+  // Then, generate new exercises when study set is loaded
+  useEffect(() => {
+    console.log('study-set: useEffect triggered, currentSet =', {
+      id: currentSet?.id,
+      title: currentSet?.title,
+      exercisesCount: currentSet?.exercises?.length,
+      hasOriginalContent: !!currentSet?.originalContent,
+    });
+    console.log('study-set: generatedExercises.length =', generatedExercises.length, 'isGenerating =', isGenerating);
+    
+    const generateNewExercises = async () => {
+      // If no originalContent, use stored exercises directly
+      if (!currentSet?.originalContent) {
+        console.log('No originalContent, using stored exercises:', currentSet?.exercises?.length || 0);
+        if (currentSet?.exercises && currentSet.exercises.length > 0) {
+          setGeneratedExercises(currentSet.exercises);
+        }
+        return;
+      }
+      
+      if (!user) {
+        // If no user, just use stored exercises
+        setGeneratedExercises(currentSet.exercises || []);
+        return;
+      }
+      
+      setIsGenerating(true);
+      setGenerationError(null);
+      
+      try {
+        // Fetch good examples to improve AI generation
+        const goodExamples = await fetchGoodQuestionExamples(currentSet.subject, 5);
+        
+        const processor = getAIProcessor();
+        const response = await processor.processContent({
+          contentId: currentSet.contentId,
+          userId: user.email || '',
+          title: currentSet.title,
+          content: currentSet.originalContent,
+          subject: currentSet.subject,
+          preferredExerciseTypes: [
+            'multiple-choice',
+            'fill-blank',
+            'true-false',
+            'matching',
+          ],
+          targetDifficulty: ['easy', 'medium', 'hard'],
+          numberOfExercises: 10,
+        }, goodExamples);
+
+        if (response.exercises && response.exercises.length > 0) {
+          setGeneratedExercises(response.exercises);
+        } else {
+          // Fallback to stored exercises if generation fails
+          setGeneratedExercises(currentSet.exercises || []);
+        }
+      } catch (error) {
+        console.error('Error generating new exercises:', error);
+        setGenerationError('שגיאה ביצירת שאלות חדשות, משתמש בשאלות קיימות');
+        // Fallback to stored exercises
+        setGeneratedExercises(currentSet.exercises || []);
+      } finally {
+        setIsGenerating(false);
+      }
+    };
+
+    if (currentSet && !generatedExercises.length && !isGenerating) {
+      generateNewExercises();
+    }
+  }, [currentSet, user]);
+
+  if (loading || isGenerating) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color={Colors.accent} />
-        <Text style={styles.loadingText}>טוען תרגילים...</Text>
+        <Text style={styles.loadingText}>
+          {isGenerating ? 'מייצר שאלות חדשות...' : 'טוען תרגילים...'}
+        </Text>
       </View>
     );
   }
 
-  if (!currentSet || !currentSet.exercises || currentSet.exercises.length === 0) {
+  if (!currentSet || generatedExercises.length === 0) {
     return (
       <View style={styles.container}>
         <View style={styles.emptyContainer}>
@@ -64,7 +143,7 @@ export default function StudySet() {
     );
   }
 
-  const exercises = currentSet.exercises as GeneratedExercise[];
+  const exercises = generatedExercises;
   const currentExercise = exercises[currentExerciseIndex];
   const progress = ((currentExerciseIndex + 1) / exercises.length) * 100;
 
@@ -120,6 +199,14 @@ export default function StudySet() {
         <View style={styles.spacer} />
       </View>
 
+      {/* Generation Error Notice */}
+      {generationError && (
+        <View style={styles.errorNotice}>
+          <Ionicons name="information-circle" size={16} color="#ff9800" />
+          <Text style={styles.errorNoticeText}>{generationError}</Text>
+        </View>
+      )}
+
       {/* Progress Bar */}
       <View style={styles.progressSection}>
         <View style={styles.progressInfo}>
@@ -141,6 +228,7 @@ export default function StudySet() {
           exercise={currentExercise}
           exerciseNumber={currentExerciseIndex + 1}
           totalExercises={exercises.length}
+          subject={currentSet.subject}
           onAnswer={(id, answer, correct) => {
             setUserAnswers((prev) => ({
               ...prev,
@@ -443,5 +531,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.gray,
     marginTop: 12,
+  },
+  errorNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff3e0',
+    padding: 10,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  errorNoticeText: {
+    fontSize: 13,
+    color: '#e65100',
+    flex: 1,
+    textAlign: 'right',
   },
 });

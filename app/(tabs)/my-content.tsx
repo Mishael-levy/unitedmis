@@ -9,6 +9,7 @@ import {
   Alert,
   I18nManager,
   FlatList,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,9 +23,11 @@ I18nManager.forceRTL(true);
 export default function MyContent() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const isGuest = useAuthStore((state) => state.isGuest);
   const {
     uploadedContents,
     studySets,
+    localStudySets,
     loading,
     error,
     fetchUserContents,
@@ -33,71 +36,93 @@ export default function MyContent() {
     deleteStudySet,
   } = useContentAndStudyStore();
 
+  // For guests, use localStudySets; for authenticated users, use studySets from Firebase
+  const displayStudySets = isGuest ? localStudySets : studySets;
+
   useEffect(() => {
-    if (user?.email) {
+    // Only fetch from Firebase for authenticated users
+    if (user?.email && !isGuest) {
       loadContent();
     }
-  }, [user]);
+  }, [user, isGuest]);
 
   const loadContent = async () => {
-    if (user?.email) {
+    if (user?.email && !isGuest) {
       await fetchUserContents(user.email);
       await fetchUserStudySets(user.email);
     }
   };
 
-  const handleDeleteContent = (contentId: string, title: string) => {
-    Alert.alert(
-      'מחק קובץ',
-      `האם אתה בטוח שברצונך למחוק את "${title}"?`,
-      [
-        {
-          text: 'ביטול',
-          onPress: () => {},
-          style: 'cancel',
-        },
-        {
-          text: 'מחק',
-          onPress: async () => {
-            try {
-              await deleteContent(contentId);
-              await loadContent();
-              Alert.alert('הצלחה', 'הקובץ נמחק בהצלחה');
-            } catch (err) {
-              Alert.alert('שגיאה', 'לא הצלח למחוק את הקובץ');
-            }
-          },
-          style: 'destructive',
-        },
-      ]
-    );
+  const handleDeleteContent = async (contentId: string, title: string) => {
+    const confirmed = Platform.OS === 'web' 
+      ? window.confirm(`האם אתה בטוח שברצונך למחוק את "${title}"?`)
+      : await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'מחק קובץ',
+            `האם אתה בטוח שברצונך למחוק את "${title}"?`,
+            [
+              { text: 'ביטול', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'מחק', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          );
+        });
+
+    if (!confirmed) return;
+
+    try {
+      console.log('Deleting content:', contentId);
+      await deleteContent(contentId);
+      console.log('Content deleted successfully');
+      if (Platform.OS === 'web') {
+        alert('הקובץ נמחק בהצלחה');
+      } else {
+        Alert.alert('הצלחה', 'הקובץ נמחק בהצלחה');
+      }
+    } catch (err) {
+      console.error('Delete content error:', err);
+      const errorMsg = err instanceof Error ? err.message : 'שגיאה לא ידועה';
+      if (Platform.OS === 'web') {
+        alert(`שגיאה: ${errorMsg}`);
+      } else {
+        Alert.alert('שגיאה', `לא הצלח למחוק את הקובץ: ${errorMsg}`);
+      }
+    }
   };
 
-  const handleDeleteStudySet = (setId: string, title: string) => {
-    Alert.alert(
-      'מחק מערך תרגול',
-      `האם אתה בטוח שברצונך למחוק את "${title}"?`,
-      [
-        {
-          text: 'ביטול',
-          onPress: () => {},
-          style: 'cancel',
-        },
-        {
-          text: 'מחק',
-          onPress: async () => {
-            try {
-              await deleteStudySet(setId);
-              await loadContent();
-              Alert.alert('הצלחה', 'מערך התרגול נמחק בהצלחה');
-            } catch (err) {
-              Alert.alert('שגיאה', 'לא הצלח למחוק את מערך התרגול');
-            }
-          },
-          style: 'destructive',
-        },
-      ]
-    );
+  const handleDeleteStudySet = async (setId: string, title: string) => {
+    const confirmed = Platform.OS === 'web'
+      ? window.confirm(`האם אתה בטוח שברצונך למחוק את מערך התרגול "${title}"?`)
+      : await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'מחק מערך תרגול',
+            `האם אתה בטוח שברצונך למחוק את "${title}"?`,
+            [
+              { text: 'ביטול', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'מחק', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          );
+        });
+
+    if (!confirmed) return;
+
+    try {
+      console.log('Deleting study set:', setId);
+      await deleteStudySet(setId);
+      console.log('Study set deleted successfully');
+      if (Platform.OS === 'web') {
+        alert('מערך התרגול נמחק בהצלחה');
+      } else {
+        Alert.alert('הצלחה', 'מערך התרגול נמחק בהצלחה');
+      }
+    } catch (err) {
+      console.error('Delete study set error:', err);
+      const errorMsg = err instanceof Error ? err.message : 'שגיאה לא ידועה';
+      if (Platform.OS === 'web') {
+        alert(`שגיאה: ${errorMsg}`);
+      } else {
+        Alert.alert('שגיאה', `לא הצלח למחוק את מערך התרגול: ${errorMsg}`);
+      }
+    }
   };
 
   const getStatusIcon = (status: string) => {
@@ -167,7 +192,7 @@ export default function MyContent() {
           style={styles.actionButton}
           onPress={() => {
             // Find related study set
-            const relatedSet = studySets.find((s) => s.contentId === item.id);
+            const relatedSet = displayStudySets.find((s) => s.contentId === item.id);
             if (relatedSet) {
               router.push(`/study-set?setId=${relatedSet.id}`);
             } else {
@@ -260,8 +285,8 @@ export default function MyContent() {
     );
   }
 
-  const hasContent = uploadedContents && uploadedContents.length > 0;
-  const hasStudySets = studySets && studySets.length > 0;
+  const hasContent = !isGuest && uploadedContents && uploadedContents.length > 0;
+  const hasStudySets = displayStudySets && displayStudySets.length > 0;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
@@ -291,9 +316,9 @@ export default function MyContent() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="school" size={20} color={Colors.accent} />
-            <Text style={styles.sectionTitle}>מערכות תרגול ({studySets.length})</Text>
+            <Text style={styles.sectionTitle}>מערכות תרגול ({displayStudySets.length})</Text>
           </View>
-          {studySets.map((item) => (
+          {displayStudySets.map((item) => (
             <React.Fragment key={item.id}>
               {renderStudySetItem(item)}
             </React.Fragment>
@@ -307,14 +332,20 @@ export default function MyContent() {
           <Ionicons name="document-outline" size={80} color={Colors.lightGray} />
           <Text style={styles.emptyTitle}>אין לך קבצים עדיין</Text>
           <Text style={styles.emptyText}>
-            היא לך קבצים או טקסט בחדש בטאב "העלאה" כדי להתחיל ללמוד
+            העלה קבצים או טקסט בטאב "העלאה" כדי להתחיל ללמוד
           </Text>
+          {isGuest && (
+            <Text style={styles.guestWarning}>
+              💡 שים לב: כאורח, הקבצים שלך יישמרו רק עד שתסגור את האפליקציה.
+              התחבר כדי לשמור לצמיתות!
+            </Text>
+          )}
           <TouchableOpacity
             style={styles.emptyButton}
             onPress={() => router.push('/(tabs)/upload')}
           >
             <Ionicons name="cloud-upload" size={20} color="white" />
-            <Text style={styles.emptyButtonText}>עלה קובץ</Text>
+            <Text style={styles.emptyButtonText}>העלה קובץ</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -545,5 +576,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.gray,
     marginTop: 12,
+  },
+  guestWarning: {
+    fontSize: 13,
+    color: '#FF9800',
+    marginTop: 12,
+    marginBottom: 8,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    lineHeight: 20,
   },
 });

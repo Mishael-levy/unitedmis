@@ -25,6 +25,7 @@ export default function SignIn() {
 
   const login = useAuthStore((state) => state.login);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isGuest = useAuthStore((state) => state.isGuest);
 
   useEffect(() => {
     navigation.setOptions({
@@ -36,10 +37,11 @@ export default function SignIn() {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    // Only redirect if authenticated AND not a guest
+    if (isAuthenticated && !isGuest) {
       router.replace('/(tabs)');
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, isGuest]);
 
   const onSignIn = async () => {
     if (!email || !password) {

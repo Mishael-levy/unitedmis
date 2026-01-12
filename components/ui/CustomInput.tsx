@@ -8,9 +8,10 @@ interface Props {
   handleTextChange?: (value: string) => void;
   secureTextEntry?: boolean; 
   sendInput? : boolean;
+  value?: string;
 }
 
-export default function CustomInput({ placeholder, handleTextChange, secureTextEntry ,sendInput}: Props) {
+export default function CustomInput({ placeholder, handleTextChange, secureTextEntry ,sendInput, value}: Props) {
   const [isPasswordVisible, setIsPasswordVisible] = useState(!secureTextEntry);
 
   return (
@@ -20,6 +21,7 @@ export default function CustomInput({ placeholder, handleTextChange, secureTextE
         onChangeText={handleTextChange}
         placeholder={placeholder}
         secureTextEntry={!isPasswordVisible} // Toggle secureTextEntry
+        value={value}
       />
       {secureTextEntry && (
         <TouchableOpacity

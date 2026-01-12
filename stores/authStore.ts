@@ -10,9 +10,11 @@ import { Badge, UserProf } from '@/types/data';
 
 interface AuthState {
   isAuthenticated: boolean;
+  isGuest: boolean;
   user: UserProf | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginAsGuest: () => void;
   createUser: (
     email: string,
     password: string,
@@ -25,11 +27,25 @@ interface AuthState {
     updateProgress: (lessonId: string) => void;
 }
 
+// Guest user profile
+const GUEST_USER: UserProf = {
+  name: 'אורח',
+  email: 'guest@local',
+  gems: 0,
+  hearts: 5,
+  streak: Date.now(),
+  badges: [],
+  avatar: 'https://robohash.org/guest',
+  progress: [],
+  xp: 0,
+};
+
 /**
  * Auth store for managing authentication state.
  *
  * @typedef {Object} AuthState
  * @property {boolean} isAuthenticated - Indicates if the user is authenticated.
+ * @property {boolean} isGuest - Indicates if the user is in guest mode.
  * @property {UserProf | null} user - The authenticated user's profile data.
  * @property {string | null} token - The authentication token.
  * @property {boolean} loading - Indicates if an authentication-related operation is in progress.
@@ -40,6 +56,10 @@ interface AuthState {
  * @param {string} password - The user's password.
  * @description Authenticates the user with the provided email and password.
  * Sets the loading state to true during the process and updates the store with the user's authentication state upon success or failure.
+ *
+ * @function loginAsGuest
+ * @description Logs in as a guest user without authentication.
+ * Guest progress is stored locally and not synced to Firebase.
  *
  * @function createUser
  * @async
@@ -60,9 +80,20 @@ interface AuthState {
  * Sets the loading state to true during the process and updates the store with the user's profile data upon success or failure.
  */
 export const useAuthStore = create<AuthState>((set) => ({
-  isAuthenticated: false,
-  user: null,
-  loading: false, // Initialize loading state as false
+  // Start as guest by default
+  isAuthenticated: true,
+  isGuest: true,
+  user: GUEST_USER,
+  loading: false,
+
+  loginAsGuest: () => {
+    set({
+      isAuthenticated: true,
+      isGuest: true,
+      user: { ...GUEST_USER },
+      loading: false,
+    });
+  },
 
   login: async (email, password) => {
     set({ loading: true }); // Set loading to true when login starts
@@ -76,32 +107,20 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       set({
         isAuthenticated: true,
+        isGuest: false,
         loading: false, // Set loading to false when login is successful
       });
 
       await useAuthStore.getState().fetchUserData(user.uid);
     } catch (error: any) {
-    //   console.error('Login failed:', error);
-    
-      // in case the user credentials are incorrect, the error message will be displayed
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        "ariel543212@gmail.com",
-        "123456",
-      );
-
-      const user = userCredential.user;
-
-      set({
-        isAuthenticated: true,
-        loading: false, // Set loading to false when login is successful
-      });
-
-      await useAuthStore.getState().fetchUserData(user.uid);
-
-    //   const errorMsg = error.message;
-    //   ToastAndroid.show(errorMsg, ToastAndroid.LONG);
-    //   set({ loading: false }); // Set loading to false if login fails
+      console.error('Login failed:', error);
+      const errorMsg = error.message || 'שגיאה בהתחברות';
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(errorMsg, ToastAndroid.LONG);
+      } else {
+        Alert.alert('שגיאה', errorMsg);
+      }
+      set({ loading: false });
     }
   },
 
@@ -181,8 +200,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     set({ loading: true }); // Set loading to true during logout
     auth.signOut();
-    set({ isAuthenticated: false, user: null, loading: false }); // Set loading to false after logout
-    console.log('User logged out');
+    // Return to guest mode instead of logged out
+    set({ 
+      isAuthenticated: true, 
+      isGuest: true, 
+      user: { ...GUEST_USER }, 
+      loading: false 
+    });
+    console.log('User logged out, returned to guest mode');
   },
 
   fetchUserData: async (userId) => {

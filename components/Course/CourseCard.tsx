@@ -1,25 +1,52 @@
 import { useArrayStore } from '@/stores/arrStore';
-import { Course } from '@/types/data';
+import { Course, CustomCourse, AnyCourse, isCustomCourse } from '@/types/data';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
+interface CourseCardProps {
+    id: string;
+    title: string;
+    description: string;
+    image?: string;
+    coverColor?: string;
+    isCustom?: boolean;
+}
 
-export default function CourseCard({ id, title, description, image } : Course) {
+export default function CourseCard({ id, title, description, image, coverColor, isCustom }: CourseCardProps) {
     const router = useRouter();
     const addItem = useArrayStore((state) => state.addItem);
+    
     const handlePress = () => {
         if(id == 'F4wA3R7V0dIzb7ya2NJ4') addItem('Fire')
+        else if(id.startsWith('local-course-')) {
+            // Custom course, no special item
+        }
         else addItem('CPR');
         router.push(`/course/${id}`)
     }
     
     return (
-
-
         <TouchableOpacity style={styles.card} onPress={handlePress}>
-            {/* Course Image */}
-            <Image source={{ uri: image }} style={styles.image} />
+            {/* Course Image or Color Cover */}
+            {image ? (
+                <Image source={{ uri: image }} style={styles.image} />
+            ) : coverColor ? (
+                <View style={[styles.colorCover, { backgroundColor: coverColor }]}>
+                    {isCustom && (
+                        <View style={styles.customBadge}>
+                            <Ionicons name="create" size={16} color="white" />
+                            <Text style={styles.customBadgeText}>קורס מותאם</Text>
+                        </View>
+                    )}
+                    <Text style={styles.coverTitle}>{title}</Text>
+                </View>
+            ) : (
+                <View style={[styles.colorCover, { backgroundColor: '#3b82f6' }]}>
+                    <Text style={styles.coverTitle}>{title}</Text>
+                </View>
+            )}
 
             {/* Course Info */}
             <View style={styles.info}>
@@ -51,6 +78,40 @@ const styles = StyleSheet.create({
         height: 160,
         resizeMode: 'cover',
     },
+    colorCover: {
+        width: '100%',
+        height: 160,
+        justifyContent: 'center',
+        alignItems: 'center',
+        position: 'relative',
+    },
+    coverTitle: {
+        fontSize: 28,
+        fontWeight: 'bold',
+        color: 'white',
+        textAlign: 'center',
+        textShadowColor: 'rgba(0,0,0,0.3)',
+        textShadowOffset: { width: 0, height: 2 },
+        textShadowRadius: 4,
+        paddingHorizontal: 20,
+    },
+    customBadge: {
+        position: 'absolute',
+        top: 12,
+        right: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.3)',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+        gap: 4,
+    },
+    customBadgeText: {
+        fontSize: 12,
+        color: 'white',
+        fontWeight: '500',
+    },
     info: {
         padding: 20,
     },
@@ -66,6 +127,5 @@ const styles = StyleSheet.create({
         color: '#7f8c8d',
         lineHeight: 22,
         textAlign: 'right'
-        // writingDirection: 'rtl',
     },
 });

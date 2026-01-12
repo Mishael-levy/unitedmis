@@ -9,17 +9,84 @@ import {
   Alert,
   I18nManager,
   Platform,
+  Modal,
+  TextInput,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { CustomButton } from '@/components/ui/CustomButton';
 import CustomInput from '@/components/ui/CustomInput';
-import BackArrow from '@/components/ui/BackArrow';
 import { useAuthStore } from '@/stores/authStore';
 import { useContentAndStudyStore } from '@/stores/contentAndStudyStore';
 import { getAIProcessor } from '@/services/AIContentProcessor';
+
+// Helper function to extract text from PDF using Gemini Vision
+const extractTextFromPDFWithAI = async (base64Data: string, apiKey: string): Promise<string> => {
+  try {
+    console.log('Extracting text from PDF using Gemini Vision...');
+    
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              {
+                inline_data: {
+                  mime_type: 'application/pdf',
+                  data: base64Data
+                }
+              },
+              {
+                text: 'אנא חלץ את כל הטקסט מקובץ ה-PDF הזה. החזר רק את הטקסט עצמו, ללא הערות או תוספות. שמור על המבנה והפסקאות.'
+              }
+            ]
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 8192,
+          },
+        }),
+      }
+    );
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('PDF extraction error:', data?.error?.message);
+      throw new Error(data?.error?.message || 'Failed to extract PDF text');
+    }
+
+    const extractedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log('PDF text extracted, length:', extractedText.length);
+    return extractedText;
+  } catch (error) {
+    console.error('PDF extraction failed:', error);
+    throw error;
+  }
+};
+
+// Helper functions for file processing (legacy - kept for reference)
+const extractTextFromPDF = async (uri: string): Promise<string> => {
+  // PDF files now handled by extractTextFromPDFWithAI
+  return '';
+};
+
+const extractTextFromWord = async (uri: string): Promise<string> => {
+  // Word files need special handling - for now, return empty and show alert
+  Alert.alert(
+    'קובץ Word',
+    'קריאת Word מוגבלת. מומלץ לפתוח את הקובץ ולהעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
+    [{ text: 'הבנתי' }]
+  );
+  return '';
+};
 
 I18nManager.forceRTL(true);
 
@@ -46,59 +113,129 @@ export default function UploadContent() {
   });
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const [pastedText, setPastedText] = useState('');
+
+  // Debug: Check if user is authenticated
+  useEffect(() => {
+    console.log('Upload page loaded. User:', user ? user.email : 'Not logged in');
+    if (!user) {
+      console.warn('User not authenticated - upload will not work');
+    }
+  }, [user]);
 
   const handlePickFile = async () => {
     try {
+      console.log('Starting file picker...');
       const result = await DocumentPicker.getDocumentAsync({
-        type: [
-          'application/pdf',
-          'text/plain',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ],
+        type: ['text/plain', 'text/*', 'application/pdf'],
         copyToCacheDirectory: true,
       });
+      console.log('File picker result:', result);
 
       if (!result.canceled && result.assets.length > 0) {
         const file = result.assets[0];
         setUploadProgress('קריאת קובץ...');
 
-        let fileContent = '';
-
-        // Handle file reading based on platform
-        if (Platform.OS === 'web') {
-          // On web, DocumentPicker returns a File object
-          // We need to read it differently
-          if (file.file) {
-            const text = await file.file.text();
-            fileContent = text;
-          } else {
-            throw new Error('לא ניתן לקרוא את הקובץ בדפדפן זה');
-          }
-        } else {
-          // On native platforms, use FileSystem
-          fileContent = await FileSystem.readAsStringAsync(
-            file.uri,
-            {
-              encoding: FileSystem.EncodingType.UTF8,
-            }
+        const isPDF = file.mimeType?.includes('pdf') || file.name.endsWith('.pdf');
+        const isWord = file.mimeType?.includes('word') || file.name.endsWith('.doc') || file.name.endsWith('.docx');
+        
+        // Check if it's Word - show message and stop (PDF is now supported)
+        if (isWord) {
+          setUploadProgress('');
+          Alert.alert(
+            `קובץ Word לא נתמך`,
+            `אנא פתח את המסמך, העתק את הטקסט (Ctrl+A, Ctrl+C), ולחץ על כפתור "הדבק טקסט" למטה.`,
+            [{ text: 'הבנתי' }]
           );
+          return;
         }
 
-        let fileType: UploadState['fileType'] = 'text';
-        if (file.mimeType?.includes('pdf')) fileType = 'pdf';
-        else if (file.mimeType?.includes('word') || file.mimeType?.includes('document'))
-          fileType = 'document';
+        let fileContent = '';
 
+        try {
+          if (isPDF) {
+            // Handle PDF files with Gemini Vision API
+            setUploadProgress('מחלץ טקסט מ-PDF...');
+            
+            let base64Data = '';
+            if (Platform.OS === 'web') {
+              if (file.file) {
+                const arrayBuffer = await file.file.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) {
+                  binary += String.fromCharCode(bytes[i]);
+                }
+                base64Data = btoa(binary);
+              } else {
+                throw new Error('לא ניתן לקרוא את הקובץ בדפדפן זה');
+              }
+            } else {
+              base64Data = await FileSystem.readAsStringAsync(
+                file.uri,
+                { encoding: FileSystem.EncodingType.Base64 }
+              );
+            }
+            
+            // Get API key from AI processor
+            const processor = getAIProcessor();
+            const apiKey = (processor as any).config?.apiKey || 'AIzaSyCk8Xkm_c8IFG17EolqCsTjPmTVImbiOdM';
+            
+            fileContent = await extractTextFromPDFWithAI(base64Data, apiKey);
+            
+            if (!fileContent || fileContent.trim().length < 50) {
+              throw new Error('לא הצלחנו לחלץ טקסט מספיק מה-PDF');
+            }
+          } else {
+            // Handle plain text files
+            if (Platform.OS === 'web') {
+              if (file.file) {
+                fileContent = await file.file.text();
+              } else {
+                throw new Error('לא ניתן לקרוא את הקובץ בדפדפן זה');
+              }
+            } else {
+              fileContent = await FileSystem.readAsStringAsync(
+                file.uri,
+                { encoding: FileSystem.EncodingType.UTF8 }
+              );
+            }
+          }
+        } catch (error) {
+          console.error('File reading error:', error);
+          Alert.alert(
+            'שגיאה בקריאת קובץ',
+            isPDF 
+              ? 'לא הצלחנו לחלץ טקסט מה-PDF. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".'
+              : 'לא הצלחנו לקרוא את הקובץ. אנא נסה להעתיק את הטקסט ידנית דרך כפתור "הדבק טקסט".',
+            [{ text: 'הבנתי' }]
+          );
+          setUploadProgress('');
+          return;
+        }
+
+        if (!fileContent || fileContent.trim().length === 0) {
+          Alert.alert(
+            'קובץ ריק',
+            'הקובץ שבחרת ריק או לא ניתן לקריאה. אנא נסה קובץ אחר או השתמש בכפתור "הדבק טקסט".',
+            [{ text: 'הבנתי' }]
+          );
+          setUploadProgress('');
+          return;
+        }
+
+        console.log('File loaded successfully:', file.name, 'Type:', isPDF ? 'pdf' : 'text', 'Content length:', fileContent.length);
+        
         setState((prev) => ({
           ...prev,
           fileContent,
           fileName: file.name,
-          fileType,
+          fileType: isPDF ? 'pdf' : 'text',
         }));
 
         setUploadProgress('');
-        Alert.alert('הצלחה', `הקובץ "${file.name}" נטען בהצלחה`);
+        Alert.alert('הצלחה', `הקובץ "${file.name}" נטען בהצלחה (${fileContent.length} תווים)`);
       }
     } catch (error) {
       console.error('Error picking file:', error);
@@ -107,76 +244,106 @@ export default function UploadContent() {
     }
   };
 
-  const handlePasteText = async () => {
-    // This would use clipboard API if available in React Native
-    // For now, we'll show a text input modal
-    Alert.prompt(
-      'הדבק טקסט',
-      'הדבק את תוכן הלימוד כאן',
-      [
-        { text: 'ביטול', onPress: () => {}, style: 'cancel' },
-        {
-          text: 'אישור',
-          onPress: (text) => {
-            if (text) {
-              setState((prev) => ({
-                ...prev,
-                fileContent: text,
-                fileName: `text-${Date.now()}`,
-                fileType: 'text',
-              }));
-            }
-          },
-        },
-      ],
-      'plain-text',
-      ''
-    );
+  const handlePasteText = () => {
+    setShowPasteModal(true);
+    setPastedText('');
+  };
+
+  const handlePasteConfirm = () => {
+    if (pastedText.trim()) {
+      setState((prev) => ({
+        ...prev,
+        fileContent: pastedText,
+        fileName: `text-${Date.now()}`,
+        fileType: 'text',
+      }));
+      setShowPasteModal(false);
+      setPastedText('');
+      Alert.alert('הצלחה', 'הטקסט נטען בהצלחה');
+    } else {
+      Alert.alert('שגיאה', 'אנא הזן טקסט');
+    }
   };
 
   const validateForm = (): boolean => {
+    console.log('Validating form:', {
+      title: state.title,
+      subject: state.subject,
+      fileContentLength: state.fileContent.length
+    });
+    
     if (!state.title.trim()) {
+      console.log('Validation failed: missing title');
       Alert.alert('שגיאה', 'אנא הזן כותרת');
       return false;
     }
     if (!state.subject.trim()) {
+      console.log('Validation failed: missing subject');
       Alert.alert('שגיאה', 'אנא בחר תחום ידע');
       return false;
     }
     if (!state.fileContent.trim()) {
+      console.log('Validation failed: missing content');
       Alert.alert('שגיאה', 'אנא העלה או הדבק תוכן ללימוד');
       return false;
     }
+    console.log('Form validation passed');
     return true;
   };
 
   const handleUploadAndProcess = async () => {
-    if (!validateForm() || !user) return;
+    console.log('Starting upload process...');
+    console.log('User:', user?.email);
+    console.log('State:', { title: state.title, subject: state.subject, fileContentLength: state.fileContent.length });
+    
+    if (!validateForm()) {
+      console.log('Form validation failed');
+      return;
+    }
+    
+    // No longer require authentication - guest mode is supported
 
     try {
       setLoading(true);
-      setUploadProgress('העלאת קובץ...');
+      const isGuest = useAuthStore.getState().isGuest;
+      const userId = user?.email || `guest-${Date.now()}`;
+      
+      let contentId = `local-${Date.now()}`;
+      
+      if (!isGuest) {
+        // Only save to Firebase for authenticated users
+        setUploadProgress('העלאת קובץ...');
+        console.log('Uploading to Firestore...');
 
-      // Upload content to Firestore
-      const contentId = await uploadContent({
-        userId: user.email || '',
-        fileName: state.fileName || `content-${Date.now()}`,
-        fileType: state.fileType,
-        fileUrl: `gs://bucket/${state.fileName}`, // Placeholder - would be real Firebase Storage URL
-        title: state.title,
-        description: state.description,
-        subject: state.subject,
-        uploadedAt: Date.now(),
-        status: 'processing',
-      });
-
+        contentId = await uploadContent({
+          userId: userId,
+          fileName: state.fileName || `content-${Date.now()}`,
+          fileType: state.fileType,
+          fileUrl: `gs://bucket/${state.fileName}`,
+          title: state.title,
+          description: state.description,
+          subject: state.subject,
+          uploadedAt: Date.now(),
+          status: 'processing',
+        });
+        
+        console.log('Content uploaded successfully, ID:', contentId);
+      } else {
+        console.log('Guest mode - skipping Firebase upload');
+      }
+      
       setUploadProgress('עיבוד התוכן בעזרת AI...');
 
-      // Process content with AI
+      // Fetch good question examples for this subject to improve AI generation
+      const { fetchGoodQuestionExamples } = useContentAndStudyStore.getState();
+      const goodExamples = await fetchGoodQuestionExamples(state.subject, 5);
+      console.log('Good examples found:', goodExamples.length);
+
+      // Process content with AI, using good examples for better questions
       const processor = getAIProcessor();
       const response = await processor.processContent({
         contentId,
-        userId: user.email || '',
+        userId: userId,
         title: state.title,
         content: state.fileContent,
         subject: state.subject,
@@ -188,32 +355,61 @@ export default function UploadContent() {
         ],
         targetDifficulty: ['easy', 'medium', 'hard'],
         numberOfExercises: 10,
-      });
+      }, goodExamples);
+
+      console.log('AI processing complete. Exercises:', response.exercises?.length);
+
+      if (!response.exercises || response.exercises.length === 0) {
+        throw new Error('לא הצלחנו ליצור תרגילים מהתוכן');
+      }
 
       // Create study set from generated exercises
       setUploadProgress('יצירת מערך תרגול...');
 
-      const { createStudySet } = useContentAndStudyStore.getState();
-      const setId = await createStudySet({
-        userId: user.email || '',
+      const studySetData = {
+        userId: userId,
         contentId,
         title: state.title,
-        description: response.summary,
+        description: response.summary || '',
         subject: state.subject,
         exercises: response.exercises,
+        originalContent: state.fileContent, // Save content for regenerating exercises
         completedExercises: 0,
         totalExercises: response.exercises.length,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+      };
+
+      console.log('Creating study set with data:', {
+        ...studySetData,
+        exercises: `${studySetData.exercises.length} exercises`,
       });
 
-      // Update content status
-      await updateContentStatus(contentId, 'completed');
+      let setId: string;
+      
+      if (!isGuest) {
+        // Save to Firebase for authenticated users
+        const { createStudySet } = useContentAndStudyStore.getState();
+        setId = await createStudySet(studySetData);
+        console.log('Study set created in Firebase, ID:', setId);
+        
+        // Update content status
+        await updateContentStatus(contentId, 'completed');
+      } else {
+        // For guests, store locally and use local ID
+        setId = `local-${Date.now()}`;
+        // Store in local state for the session
+        const { setLocalStudySet } = useContentAndStudyStore.getState();
+        if (setLocalStudySet) {
+          setLocalStudySet({ ...studySetData, id: setId });
+        }
+        console.log('Study set stored locally for guest, ID:', setId);
+      }
 
       setUploadProgress('');
       Alert.alert(
         'הצלחה!',
-        `תוכן "${state.title}" עובד בהצלחה. נוצרו ${response.exercises.length} תרגילים`,
+        `תוכן "${state.title}" עובד בהצלחה. נוצרו ${response.exercises.length} תרגילים${isGuest ? '\n\n💡 התחבר כדי לשמור את ההתקדמות שלך!' : ''}`,
         [
           {
             text: 'התחל ללמוד',
@@ -265,7 +461,12 @@ export default function UploadContent() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <View style={styles.header}>
-        <BackArrow />
+        <TouchableOpacity
+          onPress={() => router.push('/(tabs)')}
+          style={{ alignSelf: 'flex-end' }}
+        >
+          <Ionicons name="arrow-forward" size={24} color="black" />
+        </TouchableOpacity>
         <Text style={styles.title}>העלאת חומר לימוד</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -276,6 +477,7 @@ export default function UploadContent() {
         <CustomInput
           placeholder="לדוגמה: פרק 3 - התהליך הפוטוסינתטי"
           handleTextChange={(text: string) => setState((prev) => ({ ...prev, title: text }))}
+          value={state.title}
         />
       </View>
 
@@ -316,6 +518,7 @@ export default function UploadContent() {
         <CustomInput
           placeholder="תיאור קצר של התוכן"
           handleTextChange={(text: string) => setState((prev) => ({ ...prev, description: text }))}
+          value={state.description}
         />
       </View>
 
@@ -351,7 +554,9 @@ export default function UploadContent() {
               disabled={loading}
               backgroundColor={Colors.accent}
             />
-            <Text style={styles.divider}>או</Text>
+            <View style={styles.dividerContainer}>
+              <Text style={styles.divider}>או</Text>
+            </View>
             <CustomButton
               title="הדבק טקסט"
               handlePress={handlePasteText}
@@ -379,6 +584,43 @@ export default function UploadContent() {
       />
 
       <View style={{ height: 40 }} />
+
+      {/* Paste Text Modal */}
+      <Modal
+        visible={showPasteModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowPasteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>הדבק טקסט</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="הדבק או הקלד את התוכן כאן..."
+              multiline
+              numberOfLines={10}
+              value={pastedText}
+              onChangeText={setPastedText}
+              textAlignVertical="top"
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonCancel]}
+                onPress={() => setShowPasteModal(false)}
+              >
+                <Text style={styles.modalButtonText}>ביטול</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonConfirm]}
+                onPress={handlePasteConfirm}
+              >
+                <Text style={[styles.modalButtonText, { color: 'white' }]}>אישור</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -480,6 +722,11 @@ const styles = StyleSheet.create({
     marginVertical: 12,
     fontSize: 12,
   },
+  dividerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 4,
+  },
   progressSection: {
     paddingHorizontal: 16,
     paddingVertical: 24,
@@ -490,5 +737,61 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.text,
     fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.text,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    minHeight: 200,
+    textAlign: 'right',
+    backgroundColor: '#f9f9f9',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalButtonCancel: {
+    backgroundColor: '#f0f0f0',
+  },
+  modalButtonConfirm: {
+    backgroundColor: Colors.accent,
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.text,
   },
 });

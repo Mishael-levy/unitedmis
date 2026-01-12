@@ -38,7 +38,7 @@ const EmergencyCard: React.FC<EmergencyCardProps> = ({
         <ScrollView style={styles.stepsContainer}>
           {steps.map((step, index) => (
             <View key={index} style={styles.stepContainer}>
-              <Text style={styles.stepNumber}>.{index + 1}</Text>
+              <Text style={styles.stepNumber}>{index + 1}.</Text>
               <Text style={styles.stepText}>{step}</Text>
             </View>
           ))}

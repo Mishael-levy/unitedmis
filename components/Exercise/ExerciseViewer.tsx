@@ -8,16 +8,31 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { Colors } from '@/constants/Colors';
-import { GeneratedExercise, ExerciseType } from '@/types/ai-learning';
+import { GeneratedExercise, ExerciseType, FeedbackRating, FeedbackReason } from '@/types/ai-learning';
+import { useContentAndStudyStore } from '@/stores/contentAndStudyStore';
+import { useAuthStore } from '@/stores/authStore';
 
 I18nManager.forceRTL(true);
+
+// Feedback reason options
+const FEEDBACK_REASONS: { value: FeedbackReason; label: string }[] = [
+  { value: 'unclear', label: '❓ השאלה לא ברורה' },
+  { value: 'too-easy', label: '😴 קלה מדי' },
+  { value: 'too-hard', label: '🤯 קשה מדי' },
+  { value: 'wrong-answer', label: '❌ התשובה הנכונה שגויה' },
+  { value: 'not-relevant', label: '🎯 לא קשורה לחומר' },
+  { value: 'other', label: '💬 אחר' },
+];
 
 interface ExerciseViewerProps {
   exercise: GeneratedExercise;
   exerciseNumber: number;
   totalExercises: number;
+  subject: string;
   onAnswer: (exerciseId: string, answer: string | number | string[], correct: boolean) => void;
   onNext: () => void;
   onPrevious?: () => void;
@@ -57,17 +72,78 @@ export default function ExerciseViewer({
   exercise,
   exerciseNumber,
   totalExercises,
+  subject,
   onAnswer,
   onNext,
   onPrevious,
 }: ExerciseViewerProps) {
   const [selectedAnswer, setSelectedAnswer] = useState<string | number | string[] | null>(null);
+  const [textAnswer, setTextAnswer] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
+  const [feedbackGiven, setFeedbackGiven] = useState(false);
+  const [showReasonModal, setShowReasonModal] = useState(false);
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+
+  const user = useAuthStore((state) => state.user);
+  const { submitQuestionFeedback } = useContentAndStudyStore();
+
+  // Reset state when exercise changes
+  useEffect(() => {
+    setSelectedAnswer(null);
+    setTextAnswer('');
+    setShowFeedback(false);
+    setIsCorrect(false);
+    setFeedbackGiven(false);
+    setShowReasonModal(false);
+  }, [exercise.id]);
+
+  const handleQuestionFeedback = async (rating: FeedbackRating, reason?: FeedbackReason) => {
+    if (feedbackGiven || isSubmittingFeedback) return;
+    
+    // For guests, just mark as given without saving to Firebase
+    if (!user) {
+      setFeedbackGiven(true);
+      setShowReasonModal(false);
+      return;
+    }
+    
+    setIsSubmittingFeedback(true);
+    try {
+      await submitQuestionFeedback({
+        exerciseId: exercise.id,
+        userId: user.email || '',
+        rating,
+        reason,
+        questionText: exercise.question,
+        questionType: exercise.type,
+        subject: subject,
+      });
+      
+      setFeedbackGiven(true);
+      setShowReasonModal(false);
+    } catch (error) {
+      console.error('Error submitting feedback:', error);
+      // Still mark as given to avoid getting stuck
+      setFeedbackGiven(true);
+      setShowReasonModal(false);
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
+  };
+
+  const handleBadFeedback = () => {
+    setShowReasonModal(true);
+  };
 
   const checkAnswer = () => {
-    if (selectedAnswer === null) {
-      Alert.alert('שגיאה', 'אנא בחר תשובה');
+    // For fill-blank and short-answer, use textAnswer
+    const answerToCheck = exercise.type === 'fill-blank' || exercise.type === 'short-answer' 
+      ? textAnswer.trim() 
+      : selectedAnswer;
+
+    if (answerToCheck === null || answerToCheck === '') {
+      Alert.alert('שגיאה', 'אנא הזן תשובה');
       return;
     }
 
@@ -75,7 +151,12 @@ export default function ExerciseViewer({
     const correctAnswer = exercise.correctAnswer;
     let isAnswerCorrect = false;
 
-    if (Array.isArray(correctAnswer) && Array.isArray(selectedAnswer)) {
+    if (exercise.type === 'fill-blank' || exercise.type === 'short-answer') {
+      // For text answers, compare strings (case insensitive)
+      const userAnswer = String(answerToCheck).trim().toLowerCase();
+      const correct = String(correctAnswer).trim().toLowerCase();
+      isAnswerCorrect = userAnswer === correct;
+    } else if (Array.isArray(correctAnswer) && Array.isArray(selectedAnswer)) {
       isAnswerCorrect = JSON.stringify(correctAnswer.sort()) === JSON.stringify(selectedAnswer.sort());
     } else {
       isAnswerCorrect = selectedAnswer === correctAnswer;
@@ -85,7 +166,7 @@ export default function ExerciseViewer({
     setShowFeedback(true);
 
     // Record the answer
-    onAnswer(exercise.id, selectedAnswer as string | number | string[], isAnswerCorrect);
+    onAnswer(exercise.id, answerToCheck as string | number | string[], isAnswerCorrect);
   };
 
   const renderExerciseContent = () => {
@@ -110,8 +191,12 @@ export default function ExerciseViewer({
   const renderMultipleChoice = () => (
     <View style={styles.exerciseContent}>
       <Text style={styles.question}>{exercise.question}</Text>
-      {exercise.keywords && (
-        <Text style={styles.subQuestion}>{exercise.keywords}</Text>
+      {exercise.keywords && exercise.keywords.length > 0 && (
+        <Text style={styles.subQuestion}>
+          {Array.isArray(exercise.keywords) 
+            ? exercise.keywords.join(', ') 
+            : String(exercise.keywords)}
+        </Text>
       )}
       <View style={styles.optionsContainer}>
         {exercise.options?.map((option, index) => (
@@ -195,10 +280,24 @@ export default function ExerciseViewer({
   const renderFillBlank = () => (
     <View style={styles.exerciseContent}>
       <Text style={styles.question}>{exercise.question}</Text>
-      {/* TODO: Implement text input for fill-blank */}
-      <View style={styles.blankInput}>
-        <Text style={styles.placeholderText}>טקסט ריק - להשלמה</Text>
-      </View>
+      <TextInput
+        style={[
+          styles.textInputAnswer,
+          showFeedback && isCorrect && styles.textInputCorrect,
+          showFeedback && !isCorrect && styles.textInputIncorrect,
+        ]}
+        placeholder="הקלד את התשובה כאן..."
+        placeholderTextColor="#999"
+        value={textAnswer}
+        onChangeText={setTextAnswer}
+        editable={!showFeedback}
+        textAlign="right"
+      />
+      {showFeedback && !isCorrect && (
+        <Text style={styles.correctAnswerText}>
+          התשובה הנכונה: {exercise.correctAnswer}
+        </Text>
+      )}
     </View>
   );
 
@@ -287,6 +386,64 @@ export default function ExerciseViewer({
           <Text style={styles.feedbackText}>{exercise.explanation}</Text>
         </View>
       )}
+
+      {/* Question Quality Feedback */}
+      {showFeedback && (
+        <View style={styles.questionFeedbackSection}>
+          <Text style={styles.questionFeedbackLabel}>
+            {feedbackGiven ? '✓ תודה על המשוב!' : 'האם השאלה הייתה טובה?'}
+          </Text>
+          {!feedbackGiven && (
+            <View style={styles.questionFeedbackButtons}>
+              <TouchableOpacity
+                style={[styles.feedbackButton, styles.feedbackButtonGood, isSubmittingFeedback && styles.feedbackButtonDisabled]}
+                onPress={() => handleQuestionFeedback('good')}
+                disabled={isSubmittingFeedback}
+              >
+                <Text style={styles.feedbackButtonText}>
+                  {isSubmittingFeedback ? '...' : '👍 שאלה טובה'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.feedbackButton, styles.feedbackButtonBad, isSubmittingFeedback && styles.feedbackButtonDisabled]}
+                onPress={handleBadFeedback}
+                disabled={isSubmittingFeedback}
+              >
+                <Text style={styles.feedbackButtonText}>👎 לא ברורה</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Feedback Reason Modal */}
+      <Modal
+        visible={showReasonModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReasonModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>מה הבעיה עם השאלה?</Text>
+            {FEEDBACK_REASONS.map((reason) => (
+              <TouchableOpacity
+                key={reason.value}
+                style={styles.reasonButton}
+                onPress={() => handleQuestionFeedback('bad', reason.value)}
+              >
+                <Text style={styles.reasonButtonText}>{reason.label}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={styles.modalCancelButton}
+              onPress={() => setShowReasonModal(false)}
+            >
+              <Text style={styles.modalCancelText}>ביטול</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Keywords */}
       {exercise.keywords && exercise.keywords.length > 0 && (
@@ -617,5 +774,108 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: Colors.white,
+  },
+  textInputAnswer: {
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 14,
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
+    marginTop: 12,
+    textAlign: 'right',
+  },
+  textInputCorrect: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#f1f8f4',
+  },
+  textInputIncorrect: {
+    borderColor: '#f44336',
+    backgroundColor: '#fef5f5',
+  },
+  correctAnswerText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#4CAF50',
+    fontWeight: '600',
+  },
+  questionFeedbackSection: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  questionFeedbackLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  questionFeedbackButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  feedbackButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  feedbackButtonGood: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#4CAF50',
+  },
+  feedbackButtonBad: {
+    backgroundColor: '#ffebee',
+    borderColor: '#f44336',
+  },
+  feedbackButtonDisabled: {
+    opacity: 0.5,
+  },
+  feedbackButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    width: '85%',
+    maxWidth: 350,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 16,
+    color: '#333',
+  },
+  reasonButton: {
+    backgroundColor: '#f5f5f5',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  reasonButtonText: {
+    fontSize: 15,
+    textAlign: 'right',
+    color: '#333',
+  },
+  modalCancelButton: {
+    marginTop: 8,
+    paddingVertical: 12,
+  },
+  modalCancelText: {
+    fontSize: 15,
+    textAlign: 'center',
+    color: '#666',
   },
 });

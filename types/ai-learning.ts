@@ -45,6 +45,7 @@ export interface StudySet {
   description: string;
   subject: string;
   exercises: GeneratedExercise[];
+  originalContent?: string; // Store original content for regenerating exercises (optional for backwards compatibility)
   createdAt: number;
   updatedAt: number;
   totalExercises: number;
@@ -113,4 +114,32 @@ export interface AIProcessingResponse {
   keyTopics: string[];
   estimatedLearningTime: number; // in minutes
   processingTime: number; // in milliseconds
+}
+
+// Question Feedback Types for AI Improvement
+export type FeedbackRating = 'good' | 'bad';
+export type FeedbackReason = 'unclear' | 'too-easy' | 'too-hard' | 'wrong-answer' | 'not-relevant' | 'other';
+
+export interface QuestionFeedback {
+  id: string;
+  exerciseId: string;
+  userId: string;
+  rating: FeedbackRating;
+  reason?: FeedbackReason;
+  questionText: string;
+  questionType: ExerciseType;
+  subject: string;
+  createdAt: number;
+}
+
+export interface QuestionQualityMetrics {
+  exerciseId: string;
+  questionText: string;
+  questionType: ExerciseType;
+  subject: string;
+  totalAttempts: number;
+  correctRate: number; // 0-1
+  positiveRatings: number;
+  negativeRatings: number;
+  qualityScore: number; // calculated: correctRate * 0.5 + positiveRatio * 0.5
 }
