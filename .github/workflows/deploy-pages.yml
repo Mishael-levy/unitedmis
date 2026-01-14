@@ -36,12 +36,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Deploy `dist` to `gh-pages` branch
-        uses: peaceiris/actions-gh-pages@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          publish_branch: gh-pages
-          user_name: github-actions
-          user_email: github-actions@github.com
+          persist-credentials: true
+
+      - name: Deploy `dist` to `master` -> `docs/`
+        run: |
+          set -e
+          rm -rf docs || true
+          mkdir -p docs
+          cp -R dist/* docs/
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          if git status --porcelain | grep -q docs; then
+            git add docs
+            git commit -m "Deploy dist to docs [ci skip]"
+            git push origin HEAD:master
+          else
+            echo "No changes in docs to commit"
+          fi
