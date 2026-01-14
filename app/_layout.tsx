@@ -31,11 +31,18 @@ export default function RootLayout() {
     // Set EXPO_PUBLIC_GROQ_API_KEY in your app config or .env file
     // In Expo, environment variables can be available on expoConfig.extra or manifest.extra depending on SDK/version
     const extras = (Constants as any).expoConfig?.extra ?? (Constants as any).manifest?.extra ?? {};
-    const groqApiKey = extras?.EXPO_PUBLIC_GROQ_API_KEY ?? '';
-    
+    const envKey = (process.env && (process.env.EXPO_PUBLIC_GROQ_API_KEY as string)) || '';
+
+    // Determine API key source: expo extras (app.json/eas), or runtime env
+    const groqApiKey = extras?.EXPO_PUBLIC_GROQ_API_KEY ?? envKey ?? '';
+
+    // Debug logging to help local dev — do not log full key in production
+    console.log('[AI] expo extras present:', !!extras?.EXPO_PUBLIC_GROQ_API_KEY);
+    console.log('[AI] process.env.EXPO_PUBLIC_GROQ_API_KEY present:', !!envKey);
+
     if (groqApiKey) {
       console.log('[AI] initializeAIProcessor -> provider: groq (api key present)');
-      initializeAIProcessor({ 
+      initializeAIProcessor({
         provider: 'groq',
         apiKey: groqApiKey,
         model: 'llama-3.3-70b-versatile',
