@@ -60,25 +60,22 @@ export default function TabLayout() {
           }}
         />
 
-        {/* אירועים (Events) Tab */}
+        {/* דיונים ושאלות (Discussions) Tab */}
         <Tabs.Screen
-          name="events"
+          name="community"
           options={{
-            title: 'אירועים',
+            title: 'דיונים',
             tabBarIcon: ({ color }) => (
-              <Ionicons name="calendar" size={24} color={color} />
+              <Ionicons name="chatbubbles" size={24} color={color} />
             ),
           }}
         />
 
-        {/* קהילה (Community) Tab */}
+        {/* Hide events tab */}
         <Tabs.Screen
-          name="community"
+          name="events"
           options={{
-            title: 'קהילה',
-            tabBarIcon: ({ color }) => (
-              <Ionicons name="people" size={24} color={color} />
-            ),
+            href: null,
           }}
         />
         {/* פרופיל (Profile) Tab */}

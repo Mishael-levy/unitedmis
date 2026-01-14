@@ -9,6 +9,7 @@ import { db } from '@/configs/FirebaseConfig';
 import Call from '@/components/Call';
 import { useArrayStore } from '@/stores/arrStore';
 import { initializeAIProcessor } from '@/services/AIContentProcessor';
+import Constants from 'expo-constants';
 
 // Suppress known warnings
 LogBox.ignoreLogs([
@@ -27,8 +28,10 @@ export default function RootLayout() {
   useEffect(() => {
     // Use Groq API for AI-powered exercise generation (free!)
     // Get your free API key at: https://console.groq.com/keys
-    // Set EXPO_PUBLIC_GROQ_API_KEY in your environment or .env file
-    const groqApiKey = process.env.EXPO_PUBLIC_GROQ_API_KEY || '';
+    // Set EXPO_PUBLIC_GROQ_API_KEY in your app config or .env file
+    // In Expo, environment variables can be available on expoConfig.extra or manifest.extra depending on SDK/version
+    const extras = (Constants as any).expoConfig?.extra ?? (Constants as any).manifest?.extra ?? {};
+    const groqApiKey = extras?.EXPO_PUBLIC_GROQ_API_KEY ?? '';
     
     if (groqApiKey) {
       initializeAIProcessor({ 
