@@ -1080,6 +1080,18 @@ ${examplesSection}
 let processorInstance: AIContentProcessor | null = null;
 
 export function initializeAIProcessor(config: AIConfig): AIContentProcessor {
+  // Log provider and whether apiKey is present (mask key for safety)
+  try {
+    const keyPresent = !!config.apiKey;
+    let masked = '';
+    if (config.apiKey) {
+      masked = config.apiKey.replace(/.(?=.{4})/g, '*');
+    }
+    console.log(`[AI] initializeAIProcessor: provider=${config.provider} apiKey=${keyPresent ? masked : 'missing'}`);
+  } catch (e) {
+    console.log('[AI] initializeAIProcessor: provider=', config.provider);
+  }
+
   processorInstance = new AIContentProcessor(config);
   return processorInstance;
 }

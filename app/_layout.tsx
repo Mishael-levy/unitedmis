@@ -34,6 +34,7 @@ export default function RootLayout() {
     const groqApiKey = extras?.EXPO_PUBLIC_GROQ_API_KEY ?? '';
     
     if (groqApiKey) {
+      console.log('[AI] initializeAIProcessor -> provider: groq (api key present)');
       initializeAIProcessor({ 
         provider: 'groq',
         apiKey: groqApiKey,
@@ -41,6 +42,7 @@ export default function RootLayout() {
       });
     } else {
       // Fallback to local generation if no API key
+      console.log('[AI] initializeAIProcessor -> provider: local (no GROQ API key)');
       initializeAIProcessor({ 
         provider: 'local',
       });
