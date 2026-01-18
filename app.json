@@ -57,7 +57,7 @@
     },
     "extra": {
       "router": {
-        "origin": false
+        "origin": "https://levgilboa.github.io"
       },
       "eas": {
         "projectId": "d10248c4-1c0b-4d84-9360-cbf0071b20be"
