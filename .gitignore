@@ -42,3 +42,4 @@ yarn-error.*
 app-example
 \.env
 \.env
+.vercel

@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/Effy/excited.png",
-    "scheme": "myapp",
+    "scheme": "https",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -57,9 +57,6 @@
       "baseUrl": "/unitedHatzalah/"
     },
     "extra": {
-      "router": {
-        "origin": false
-      },
       "eas": {
         "projectId": "d10248c4-1c0b-4d84-9360-cbf0071b20be"
       }
