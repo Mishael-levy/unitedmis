@@ -4,7 +4,7 @@ import { Course } from '@/types/data';
 import LessonNode from './LessonNode';
 import { useAuthStore } from '@/stores/authStore';
 
-export default function LessonTree({ lessons, id }: Course) {
+export default function LessonTree({ lessons, id }: { lessons: Course['lessons']; id: string }) {
   const user = useAuthStore((state) => state.user);
 
   const handleDisabled = (lessonId: string, key: number, lessons: Course['lessons']) => {

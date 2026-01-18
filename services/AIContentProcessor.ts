@@ -34,7 +34,8 @@ class AIContentProcessor {
    */
   async processContent(
     request: AIProcessingRequest,
-    goodExamples?: QuestionFeedback[]
+    goodExamples?: QuestionFeedback[],
+    badExamples?: QuestionFeedback[]
   ): Promise<AIProcessingResponse> {
     const startTime = Date.now();
 
@@ -53,7 +54,8 @@ class AIContentProcessor {
         cleanedContent,
         contentAnalysis,
         request,
-        goodExamples
+        goodExamples,
+        badExamples
       );
 
       // Calculate learning time estimate (rough estimate: 2-3 minutes per exercise)
@@ -189,11 +191,12 @@ class AIContentProcessor {
     content: string,
     analysis: any,
     request: AIProcessingRequest,
-    goodExamples?: QuestionFeedback[]
+    goodExamples?: QuestionFeedback[],
+    badExamples?: QuestionFeedback[]
   ): Promise<GeneratedExercise[]> {
     // Use real AI API if configured
     if (this.config.provider !== 'local' && this.config.apiKey) {
-      return await this.generateExercisesWithAI(content, analysis, request, goodExamples);
+      return await this.generateExercisesWithAI(content, analysis, request, goodExamples, badExamples);
     }
 
     // Fallback to local generation
@@ -207,7 +210,8 @@ class AIContentProcessor {
     content: string,
     analysis: any,
     request: AIProcessingRequest,
-    goodExamples?: QuestionFeedback[]
+    goodExamples?: QuestionFeedback[],
+    badExamples?: QuestionFeedback[]
   ): Promise<GeneratedExercise[]> {
     // Build examples section if we have good feedback
     let examplesSection = '';
@@ -224,6 +228,21 @@ ${examples}
 נסה ליצור שאלות באיכות דומה.`;
     }
 
+    // Build bad examples section if we have bad feedback
+    let badExamplesSection = '';
+    if (badExamples && badExamples.length > 0) {
+      const badExamplesList = badExamples
+        .slice(0, 3)
+        .map((ex) => `- "${ex.questionText}" (${ex.reason || 'לא ברור'})`)
+        .join('\n');
+      badExamplesSection = `
+
+דוגמאות לשאלות רעות שקיבלו משוב שלילי מהמשתמשים:
+${badExamplesList}
+
+הימנע מיצירת שאלות דומות או עם אותן טעויות.`;
+    }
+
     // Generate random seed for variety
     const randomSeed = Math.floor(Math.random() * 10000);
     const sessionId = Date.now();
@@ -237,6 +256,7 @@ ${content.slice(0, 3000)}
 רמת קושי מועדפת: ${request.targetDifficulty}
 מספר תרגילים: ${request.numberOfExercises}
 ${examplesSection}
+${badExamplesSection}
 
 מזהה סשן: ${sessionId}-${randomSeed}
 חשוב מאוד: צור שאלות שונות לגמרי מכל סשן קודם. היה יצירתי ומגוון!
@@ -245,8 +265,11 @@ ${examplesSection}
 כל תרגיל חייב להיות מבוסס ישירות על התוכן שלמעלה.
 חשוב: אל תחשוף את התשובה בתוך השאלה עצמה.
 השתמש בניסוחים שונים, זוויות שונות והיבטים שונים של החומר.
+הסברים חייבים להיות מפורטים, ברורים, ולהפנות ישירות לפסוקים או חלקים מהתוכן שמבססים את התשובה הנכונה.
 
-החזר JSON בפורמט הבא:
+החזר JSON בפורמט הבא בלבד, ללא טקסט נוסף:
+
+\`\`\`json
 {
   "exercises": [
     {
@@ -254,13 +277,14 @@ ${examplesSection}
       "question": "שאלה בעברית על התוכן",
       "options": ["תשובה 1", "תשובה 2", "תשובה 3", "תשובה 4"],
       "correctAnswer": 0,
-      "explanation": "הסבר מפורט בעברית",
+      "explanation": "הסבר מפורט וברור בעברית עם הפניה ישירה לפסוק או חלק מהתוכן שמבסס את התשובה",
       "difficulty": "medium",
       "topic": "נושא מהתוכן",
       "keywords": ["מילת מפתח 1", "מילת מפתח 2"]
     }
   ]
 }
+\`\`\`
 
 סוגי תרגילים אפשריים: multiple-choice, true-false, fill-blank
 רמות קושי: easy, medium, hard`;
@@ -328,7 +352,7 @@ ${examplesSection}
           messages: [
             {
               role: 'system',
-              content: 'אתה עוזר ליצירת תרגילים חינוכיים בעברית. תמיד החזר JSON תקין בלבד.'
+              content: 'אתה עוזר ליצירת תרגילים חינוכיים בעברית. תמיד החזר JSON תקין בלבד, ללא טקסט נוסף לפני או אחרי.'
             },
             { 
               role: 'user', 
@@ -423,6 +447,56 @@ ${examplesSection}
   }
 
   /**
+   * Call DeepSeek API
+   */
+  private async callDeepSeekAPI(
+    prompt: string,
+    contentId: string,
+    analysis: any
+  ): Promise<GeneratedExercise[] | null> {
+    const modelName = this.config.model || 'deepseek-chat';
+    const maxRetries = 3;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.8,
+            max_tokens: 4096,
+          }),
+        });
+
+        const data = await response.json();
+        console.log('DeepSeek API response status:', response.status);
+
+        if (!response.ok) {
+          const errorMessage = data?.error?.message || 'Unknown DeepSeek API error';
+          console.error('DeepSeek API error:', errorMessage);
+          return null;
+        }
+
+        const responseText = data.choices?.[0]?.message?.content || '';
+        console.log('DeepSeek response length:', responseText.length);
+        return this.parseExercisesFromResponse(responseText, contentId, analysis);
+
+      } catch (fetchError) {
+        console.error(`DeepSeek attempt ${attempt} error:`, fetchError);
+        if (attempt === maxRetries) {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * Call OpenAI API
    */
   private async callOpenAIAPI(
@@ -473,32 +547,201 @@ ${examplesSection}
     analysis: any
   ): GeneratedExercise[] | null {
     try {
+      // Try to extract JSON from code blocks first
+      const codeBlockMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        console.log('Found JSON code block');
+        let jsonString = codeBlockMatch[1].trim();
+        console.log('Extracted JSON length:', jsonString.length);
+        console.log('First 200 chars:', jsonString.substring(0, 200));
+        
+        // Clean up common JSON issues and control characters
+        jsonString = this.cleanJsonString(jsonString);
+        console.log('Cleaned JSON length:', jsonString.length);
+        console.log('Cleaned JSON first 300 chars:', jsonString.substring(0, 300));
+        
+        try {
+          const parsed = JSON.parse(jsonString);
+          if (parsed.exercises && Array.isArray(parsed.exercises)) {
+            return this.processExercises(parsed.exercises, contentId, analysis);
+          }
+        } catch (cleanError) {
+          console.error('Failed to parse cleaned JSON:', cleanError);
+          // Try to extract exercises from malformed JSON
+          const extractedExercises = this.extractExercisesFromMalformedJson(jsonString);
+          if (extractedExercises && extractedExercises.length > 0) {
+            console.log('Successfully extracted', extractedExercises.length, 'exercises from malformed JSON');
+            return this.processExercises(extractedExercises, contentId, analysis);
+          }
+        }
+      }
+
+      // Fallback: Try to find JSON object containing "exercises"
       const jsonMatch = responseText.match(/\{[\s\S]*"exercises"[\s\S]*\}/);
       if (jsonMatch) {
         console.log('Parsed JSON match found');
-        const parsed = JSON.parse(jsonMatch[0]);
-        const exercises = parsed.exercises.map((ex: any, index: number) => ({
-          id: `ex-ai-${index}-${Date.now()}`,
-          contentId: contentId,
-          type: ex.type || 'multiple-choice',
-          question: ex.question,
-          options: ex.options,
-          correctAnswer: ex.correctAnswer,
-          explanation: ex.explanation,
-          difficulty: ex.difficulty || 'medium',
-          topic: ex.topic || analysis.topics[0] || 'general',
-          keywords: ex.keywords || [],
-        }));
+        let jsonString = jsonMatch[0];
 
-        if (exercises.length > 0) {
-          console.log('First exercise:', JSON.stringify(exercises[0], null, 2));
-          return exercises;
+        // Clean up common issues and control characters
+        jsonString = this.cleanJsonString(jsonString);
+
+        const parsed = JSON.parse(jsonString);
+        if (parsed.exercises && Array.isArray(parsed.exercises)) {
+          return this.processExercises(parsed.exercises, contentId, analysis);
         }
       }
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
+      // Try fallback parsing
+      try {
+        // Find the first { and last }
+        const start = responseText.indexOf('{');
+        const last = responseText.lastIndexOf('}');
+        if (start !== -1 && last !== -1 && last > start) {
+          const jsonString = responseText.substring(start, last + 1);
+          const cleanedJson = this.cleanJsonString(jsonString);
+          const parsed = JSON.parse(cleanedJson);
+          if (parsed.exercises && Array.isArray(parsed.exercises)) {
+            return this.processExercises(parsed.exercises, contentId, analysis);
+          }
+        }
+      } catch (fallbackError) {
+        console.error('Fallback parsing also failed:', fallbackError);
+      }
     }
     return null;
+  }
+
+  /**
+   * Clean JSON string by removing control characters and fixing common issues
+   */
+  private cleanJsonString(jsonString: string): string {
+    // Remove control characters (except for \n, \r, \t which are allowed in JSON strings)
+    jsonString = jsonString.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    
+    // Remove trailing commas
+    jsonString = jsonString.replace(/,\s*}/g, '}');
+    jsonString = jsonString.replace(/,\s*]/g, ']');
+    
+    // Add quotes to unquoted keys
+    jsonString = jsonString.replace(/([{,]\s*)(\w+):/g, '$1"$2":');
+    
+    // Fix common escape issues
+    jsonString = jsonString.replace(/\\n/g, '\\\\n'); // Escape literal \n
+    jsonString = jsonString.replace(/\\t/g, '\\\\t'); // Escape literal \t
+    jsonString = jsonString.replace(/\\r/g, '\\\\r'); // Escape literal \r
+    
+    // Remove any remaining problematic characters within strings
+    // This is a more aggressive approach for badly formed JSON
+    jsonString = jsonString.replace(/"[^"]*[\x00-\x1F\x7F][^"]*"/g, (match) => {
+      return match.replace(/[\x00-\x1F\x7F]/g, '');
+    });
+
+    // Try to fix incomplete arrays by adding closing brackets
+    // Count opening and closing brackets
+    const openBraces = (jsonString.match(/\{/g) || []).length;
+    const closeBraces = (jsonString.match(/\}/g) || []).length;
+    const openBrackets = (jsonString.match(/\[/g) || []).length;
+    const closeBrackets = (jsonString.match(/\]/g) || []).length;
+
+    // Add missing closing braces
+    for (let i = 0; i < openBraces - closeBraces; i++) {
+      jsonString += '}';
+    }
+
+    // Add missing closing brackets
+    for (let i = 0; i < openBrackets - closeBrackets; i++) {
+      jsonString += ']';
+    }
+
+    // Fix incomplete strings by adding closing quotes
+    const lines = jsonString.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const quoteCount = (line.match(/"/g) || []).length;
+      if (quoteCount % 2 === 1) {
+        // Odd number of quotes, add closing quote
+        lines[i] = line + '"';
+      }
+    }
+    jsonString = lines.join('\n');
+
+    return jsonString;
+  }
+
+  /**
+   * Try to extract exercises from malformed JSON by parsing individual exercise objects
+   */
+  private extractExercisesFromMalformedJson(jsonString: string): any[] | null {
+    try {
+      // Look for exercise objects using regex
+      const exerciseRegex = /\{\s*"type"\s*:\s*"[^"]*"\s*,\s*"question"\s*:\s*"[^"]*"(?:\s*,\s*"[^"]*"\s*:\s*[^,}]*)*\}/g;
+      const matches = jsonString.match(exerciseRegex);
+      
+      if (matches && matches.length > 0) {
+        const exercises = [];
+        for (const match of matches) {
+          try {
+            // Try to parse each individual exercise
+            const exercise = JSON.parse(match);
+            if (exercise.type && exercise.question) {
+              exercises.push(exercise);
+            }
+          } catch (e) {
+            // Skip malformed individual exercises
+            console.log('Skipping malformed exercise:', match.substring(0, 100));
+          }
+        }
+        
+        if (exercises.length > 0) {
+          return exercises;
+        }
+      }
+      
+      // Fallback: Try to find all question-answer pairs
+      const questionRegex = /"question"\s*:\s*"([^"]*)"/g;
+      const questions = [];
+      let match;
+      while ((match = questionRegex.exec(jsonString)) !== null) {
+        questions.push(match[1]);
+      }
+      
+      if (questions.length > 0) {
+        // Create basic exercises from questions
+        return questions.map((question, index) => ({
+          type: 'multiple-choice',
+          question: question,
+          options: ['תשובה 1', 'תשובה 2', 'תשובה 3', 'תשובה 4'],
+          correctAnswer: 0,
+          explanation: 'תשובה שנוצרה אוטומטית',
+          difficulty: 'medium'
+        }));
+      }
+      
+    } catch (error) {
+      console.error('Failed to extract exercises from malformed JSON:', error);
+    }
+    
+    return null;
+  }
+
+  private processExercises(
+    exercises: any[],
+    contentId: string,
+    analysis: any
+  ): GeneratedExercise[] {
+    return exercises.map((ex: any, index: number) => ({
+      id: `ex-ai-${index}-${Date.now()}`,
+      contentId: contentId,
+      type: ex.type || 'multiple-choice',
+      question: ex.question,
+      options: ex.options,
+      correctAnswer: ex.correctAnswer,
+      explanation: ex.explanation,
+      difficulty: ex.difficulty || 'medium',
+      topic: ex.topic || analysis.topics[0] || 'general',
+      keywords: ex.keywords || [],
+    })).filter(ex => ex.question && ex.explanation); // Filter out incomplete exercises
   }
 
   /**

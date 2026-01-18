@@ -79,8 +79,10 @@ interface ContentAndStudyState {
     questionText: string;
     questionType: ExerciseType;
     subject: string;
+    openFeedback?: string;
   }) => Promise<void>;
   fetchGoodQuestionExamples: (subject: string, limit?: number) => Promise<QuestionFeedback[]>;
+  fetchBadQuestionExamples: (subject: string, limit?: number) => Promise<QuestionFeedback[]>;
 }
 
 const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
@@ -486,6 +488,11 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
         feedbackData.reason = feedback.reason;
       }
 
+      // Include open feedback if provided
+      if (feedback.openFeedback) {
+        feedbackData.openFeedback = feedback.openFeedback;
+      }
+
       await addDoc(collection(db, 'questionFeedback'), feedbackData);
       console.log('Question feedback submitted:', feedback.rating);
     } catch (error: unknown) {
@@ -514,6 +521,30 @@ const useContentAndStudyStore = create<ContentAndStudyState>((set, get) => ({
       return goodExamples;
     } catch (error: unknown) {
       console.error('Error fetching good examples:', error);
+      return [];
+    }
+  },
+
+  fetchBadQuestionExamples: async (subject: string, limit: number = 5) => {
+    try {
+      // Fetch questions with negative feedback for the given subject
+      const q = query(
+        collection(db, 'questionFeedback'),
+        where('rating', '==', 'bad'),
+        where('subject', '==', subject)
+      );
+      const snapshot = await getDocs(q);
+      
+      const badExamples = snapshot.docs
+        .map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        } as QuestionFeedback))
+        .slice(0, limit);
+      
+      return badExamples;
+    } catch (error: unknown) {
+      console.error('Error fetching bad examples:', error);
       return [];
     }
   },

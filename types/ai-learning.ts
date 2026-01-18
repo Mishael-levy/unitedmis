@@ -130,6 +130,7 @@ export interface QuestionFeedback {
   questionType: ExerciseType;
   subject: string;
   createdAt: number;
+  openFeedback?: string; // Optional open-ended feedback from user
 }
 
 export interface QuestionQualityMetrics {

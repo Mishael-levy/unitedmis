@@ -27,21 +27,20 @@ export default function RootLayout() {
 
   useEffect(() => {
     // Use Groq API for AI-powered exercise generation (free!)
-    // Get your free API key at: https://console.groq.com/keys
-    // Set EXPO_PUBLIC_GROQ_API_KEY in your app config or .env file
-    // In Expo, environment variables can be available on expoConfig.extra or manifest.extra depending on SDK/version
-    const extras = (Constants as any).expoConfig?.extra ?? (Constants as any).manifest?.extra ?? {};
-    const envKey = (process.env && (process.env.EXPO_PUBLIC_GROQ_API_KEY as string)) || '';
+    // Get API keys from environment variables
+    console.log('[AI] Constants.expoConfig:', Constants.expoConfig);
+    console.log('[AI] Constants.expoConfig?.extra:', Constants.expoConfig?.extra);
+    console.log('[AI] process.env.EXPO_PUBLIC_GROQ_API_KEY:', (process.env as any).EXPO_PUBLIC_GROQ_API_KEY);
 
-    // Determine API key source: expo extras (app.json/eas), or runtime env
-    const groqApiKey = extras?.EXPO_PUBLIC_GROQ_API_KEY ?? envKey ?? '';
+    const groqApiKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_GROQ_API_KEY ?? (process.env as any).EXPO_PUBLIC_GROQ_API_KEY ?? '';
 
     // Debug logging to help local dev — do not log full key in production
-    console.log('[AI] expo extras present:', !!extras?.EXPO_PUBLIC_GROQ_API_KEY);
-    console.log('[AI] process.env.EXPO_PUBLIC_GROQ_API_KEY present:', !!envKey);
+    console.log('[AI] Groq API key present:', !!groqApiKey);
+    console.log('[AI] Groq API key value:', groqApiKey ? '***' + groqApiKey.slice(-4) : 'empty');
 
+    // Initialize AI processor with Groq
     if (groqApiKey) {
-      console.log('[AI] initializeAIProcessor -> provider: groq (api key present)');
+      console.log('[AI] initializeAIProcessor -> provider: groq');
       initializeAIProcessor({
         provider: 'groq',
         apiKey: groqApiKey,

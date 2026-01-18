@@ -336,11 +336,13 @@ export default function UploadContent() {
       setUploadProgress('עיבוד התוכן בעזרת AI...');
 
       // Fetch good question examples for this subject to improve AI generation
-      const { fetchGoodQuestionExamples } = useContentAndStudyStore.getState();
+      const { fetchGoodQuestionExamples, fetchBadQuestionExamples } = useContentAndStudyStore.getState();
       const goodExamples = await fetchGoodQuestionExamples(state.subject, 5);
+      const badExamples = await fetchBadQuestionExamples(state.subject, 5);
       console.log('Good examples found:', goodExamples.length);
+      console.log('Bad examples found:', badExamples.length);
 
-      // Process content with AI, using good examples for better questions
+      // Process content with AI, using good and bad examples for better questions
       const processor = getAIProcessor();
       const response = await processor.processContent({
         contentId,
@@ -356,7 +358,7 @@ export default function UploadContent() {
         ],
         targetDifficulty: ['easy', 'medium', 'hard'],
         numberOfExercises: 10,
-      }, goodExamples);
+      }, goodExamples, badExamples);
 
       console.log('AI processing complete. Exercises:', response.exercises?.length);
 
