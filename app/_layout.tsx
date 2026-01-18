@@ -28,21 +28,10 @@ export default function RootLayout() {
   useEffect(() => {
     // Use Groq API for AI-powered exercise generation (free!)
     // Get API keys from environment variables
-    console.log('[AI] Checking environment variables...');
-
-    // Try multiple ways to access the API key
-    const groqApiKeyFromConstants = Constants.expoConfig?.extra?.EXPO_PUBLIC_GROQ_API_KEY;
-    const groqApiKeyFromProcess = (process.env as any).EXPO_PUBLIC_GROQ_API_KEY;
-
-    console.log('[AI] From Constants.expoConfig?.extra:', groqApiKeyFromConstants ? '***' + groqApiKeyFromConstants.slice(-4) : 'undefined');
-    console.log('[AI] From process.env:', groqApiKeyFromProcess ? '***' + groqApiKeyFromProcess.slice(-4) : 'undefined');
-
-    // TEMPORARY: Hardcode the API key for testing
-    const groqApiKey = groqApiKeyFromConstants || groqApiKeyFromProcess || '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';
+    const groqApiKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_GROQ_API_KEY ?? (process.env as any).EXPO_PUBLIC_GROQ_API_KEY ?? '';
 
     // Debug logging to help local dev — do not log full key in production
-    console.log('[AI] Final Groq API key present:', !!groqApiKey);
-    console.log('[AI] Final Groq API key value:', groqApiKey ? '***' + groqApiKey.slice(-4) : 'empty');
+    console.log('[AI] Groq API key present:', !!groqApiKey);
 
     // Initialize AI processor with Groq
     if (groqApiKey) {
@@ -55,7 +44,7 @@ export default function RootLayout() {
     } else {
       // Fallback to local generation if no API key
       console.log('[AI] initializeAIProcessor -> provider: local (no GROQ API key)');
-      initializeAIProcessor({ 
+      initializeAIProcessor({
         provider: 'local',
       });
       console.warn('No GROQ API key found - using local generation');
