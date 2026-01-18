@@ -30,7 +30,8 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/Effy/icon.png"
+      "favicon": "./assets/images/Effy/icon.png",
+      "publicPath": "/unitedHatzalah/"
     },
     "plugins": [
       "expo-router",
@@ -57,7 +58,7 @@
     },
     "extra": {
       "router": {
-        "origin": "https://levgilboa.github.io"
+        "origin": false
       },
       "eas": {
         "projectId": "d10248c4-1c0b-4d84-9360-cbf0071b20be"
