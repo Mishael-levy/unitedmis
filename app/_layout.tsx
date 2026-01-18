@@ -49,14 +49,10 @@ export default function RootLayout() {
       });
       console.warn('No GROQ API key found - using local generation');
     }
-  }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    
     const callsRef = collection(db, 'calls');
     const unsubscribe = onSnapshot(
-      callsRef, 
+      callsRef,
       (snapshot) => {
         snapshot.docChanges().forEach((change) => {
           if (change.type === 'added') {
